@@ -3,7 +3,7 @@ const text = `в|https://storage.mwsapis.ru/auto-post/%D0%9D%D0%9E%D0%92%D0%9E%D
 
 const out = [];
 const re = /(^|[\s\r\n]+)\+?\s*([вфvf])\|(\S+)/gi;
-
+//проверка
 let m;
 let idx = 0;
 while ((m = re.exec(text)) !== null) {
