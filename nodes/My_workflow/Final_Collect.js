@@ -1,9 +1,10 @@
 /**
- * Final Collect (TG + VK) per post_id
+ * Final Collect (TG + VK + MAX) per post_id
  *
  * Input: mixed items from:
- *  - Collect TG results (your existing code)
- *  - Collect VK results (code we added)
+ *  - Collect TG results
+ *  - Collect VK results
+ *  - Collect MAX results
  *
  * Goal:
  *  - decide final _all_ok ONLY when all enabled channels succeeded
@@ -11,11 +12,6 @@
  *  - output ONE item per post_id with fields for Google Sheets update:
  *      - update_last_run_at_utc / update_last_run_at / update_last_run_key / update_plan_run_at (ONLY if _all_ok)
  *      - update_error (always)
- *
- * IMPORTANT:
- *  - This node expects send_tg / send_vk to be present on at least one of incoming items.
- *    If they are missing, it will infer requirements from presence of TG/VK collector items.
- *    (Recommended: add send_tg and send_vk to both TG Edit Fields and VK Edit Fields so they survive to collectors.)
  */
 
 const items = $input.all();
@@ -49,13 +45,18 @@ function appendLog(existing, line) {
 }
 
 function isTgCollectorItem(p) {
-  // Your TG collector outputs: _sent_ok/_sent_fail/_sent_total and _all_ok
+  // TG collector outputs: _sent_ok/_sent_fail/_sent_total and _all_ok
   return p && (p._sent_total !== undefined || p._sent_ok !== undefined || p._sent_fail !== undefined);
 }
 
 function isVkCollectorItem(p) {
   // VK collector outputs: _vk_sent_total/_vk_sent_ok/_vk_sent_fail and _vk_all_ok
   return p && (p._vk_sent_total !== undefined || p._vk_sent_ok !== undefined || p._vk_sent_fail !== undefined);
+}
+
+function isMaxCollectorItem(p) {
+  // MAX collector outputs: _max_sent_total/_max_sent_ok/_max_sent_fail and _max_all_ok
+  return p && (p._max_sent_total !== undefined || p._max_sent_ok !== undefined || p._max_sent_fail !== undefined);
 }
 
 function pickFirstNonEmpty(...vals) {
@@ -89,6 +90,7 @@ for (const item of items) {
       // flags
       send_tg: toBoolOrNull(p.send_tg),
       send_vk: toBoolOrNull(p.send_vk),
+      send_max: toBoolOrNull(p.send_max),
 
       // collector results
       tg_seen: false,
@@ -103,13 +105,17 @@ for (const item of items) {
       vk_fail_count: null,
       vk_total: null,
 
+      max_seen: false,
+      max_ok: null,
+      max_ok_count: null,
+      max_fail_count: null,
+      max_total: null,
+
       // logs
       prev_error: p.error_prev ?? null,
       tg_update_error: null,
       vk_update_error: null,
-
-      // final error assembled later
-      final_error: null,
+      max_update_error: null,
     });
   }
 
@@ -129,23 +135,21 @@ for (const item of items) {
   // capture send flags if present anywhere
   const st = toBoolOrNull(p.send_tg);
   const sv = toBoolOrNull(p.send_vk);
+  const sm = toBoolOrNull(p.send_max);
   if (st !== null) agg.send_tg = st;
   if (sv !== null) agg.send_vk = sv;
+  if (sm !== null) agg.send_max = sm;
 
   // capture prev_error if present
   if (p.error_prev !== undefined && p.error_prev !== null) agg.prev_error = p.error_prev;
 
-  // Determine if this is TG or VK collector item
+  // Determine if this is TG/VK/MAX collector item
   if (isTgCollectorItem(p) || p._all_ok !== undefined) {
     agg.tg_seen = true;
     if (typeof p._all_ok === 'boolean') agg.tg_ok = p._all_ok;
     agg.tg_ok_count = toNumOrNull(p._sent_ok);
     agg.tg_fail_count = toNumOrNull(p._sent_fail);
     agg.tg_total = toNumOrNull(p._sent_total);
-
-    // Collect TG log line from update_error (it includes prev + appended line)
-    // We'll extract the *new* TG line by taking the last line, but safest is to just keep update_error and
-    // later build final by appending BOTH TG and VK last lines if we can.
     if (p.update_error) agg.tg_update_error = safeStr(p.update_error);
   }
 
@@ -155,18 +159,25 @@ for (const item of items) {
     agg.vk_ok_count = toNumOrNull(p._vk_sent_ok);
     agg.vk_fail_count = toNumOrNull(p._vk_sent_fail);
     agg.vk_total = toNumOrNull(p._vk_sent_total);
-
     if (p.update_error) agg.vk_update_error = safeStr(p.update_error);
   }
 
-  // If item isn't clearly TG/VK collector, but has update_error, still keep it as prev_error fallback
-  if (!agg.tg_update_error && !agg.vk_update_error && p.update_error) {
-    // Could be a prior step; treat as base log
+  if (isMaxCollectorItem(p) || p._max_all_ok !== undefined) {
+    agg.max_seen = true;
+    if (typeof p._max_all_ok === 'boolean') agg.max_ok = p._max_all_ok;
+    agg.max_ok_count = toNumOrNull(p._max_sent_ok);
+    agg.max_fail_count = toNumOrNull(p._max_sent_fail);
+    agg.max_total = toNumOrNull(p._max_sent_total);
+    if (p.update_error) agg.max_update_error = safeStr(p.update_error);
+  }
+
+  // If item isn't clearly a collector, but has update_error, keep as prev_error fallback
+  if (!agg.tg_update_error && !agg.vk_update_error && !agg.max_update_error && p.update_error) {
     agg.prev_error = p.update_error;
   }
 }
 
-// Helper to get last line of a log string
+// Helper: last line of a log string
 function lastLine(s) {
   if (!s) return '';
   const lines = String(s).split('\n').map(x => x.trim()).filter(Boolean);
@@ -177,29 +188,29 @@ const out = [];
 
 for (const agg of byPost.values()) {
   // Decide requirements:
-  // If send_tg/send_vk are unknown, infer from presence of collector items.
+  // If send_* unknown, infer from presence of collector items.
   const reqTg = (agg.send_tg === null || agg.send_tg === undefined) ? agg.tg_seen : agg.send_tg;
   const reqVk = (agg.send_vk === null || agg.send_vk === undefined) ? agg.vk_seen : agg.send_vk;
+  const reqMax = (agg.send_max === null || agg.send_max === undefined) ? agg.max_seen : agg.send_max;
 
   // Determine per-channel ok:
-  // If required but no collector result -> fail.
   const tgOk = reqTg ? (agg.tg_ok === true) : true;
   const vkOk = reqVk ? (agg.vk_ok === true) : true;
+  const maxOk = reqMax ? (agg.max_ok === true) : true;
 
-  const allOk = tgOk && vkOk;
+  const allOk = tgOk && vkOk && maxOk;
 
   // Build final error:
-  // Start with prev_error, then append last TG line and last VK line if present.
-  // We use lastLine(...) because collector update_error already includes previous history.
-  let newError = agg.prev_error;
+  let newError = null;
 
   const tgLine = lastLine(agg.tg_update_error);
   const vkLine = lastLine(agg.vk_update_error);
+  const maxLine = lastLine(agg.max_update_error);
 
   if (tgLine) newError = appendLog(newError, tgLine);
   if (vkLine) newError = appendLog(newError, vkLine);
+  if (maxLine) newError = appendLog(newError, maxLine);
 
-  // If no prev_error and collectors didn't provide anything, still provide a minimal diagnostic.
   if (!newError) {
     newError = `[INFO] ${safeStr(agg.now_utc || new Date().toISOString())} no logs from collectors`;
   }
@@ -209,22 +220,29 @@ for (const agg of byPost.values()) {
       post_id: agg.post_id,
       row_number: agg.row_number,
 
-      // final success only if all required channels succeeded
       _all_ok: allOk,
 
-      // expose channel statuses for debugging
+      // expose requirements/statuses
       _req_tg: reqTg,
       _req_vk: reqVk,
+      _req_max: reqMax,
+
       _tg_ok: agg.tg_ok,
       _vk_ok: agg.vk_ok,
+      _max_ok: agg.max_ok,
 
-      // optionally counts (may be null if not present)
+      // counts
       _tg_sent_ok: agg.tg_ok_count,
       _tg_sent_fail: agg.tg_fail_count,
       _tg_sent_total: agg.tg_total,
+
       _vk_sent_ok: agg.vk_ok_count,
       _vk_sent_fail: agg.vk_fail_count,
       _vk_sent_total: agg.vk_total,
+
+      _max_sent_ok: agg.max_ok_count,
+      _max_sent_fail: agg.max_fail_count,
+      _max_sent_total: agg.max_total,
 
       // Sheets update fields (write only on final success)
       update_last_run_at_utc: allOk ? (agg.now_utc ?? null) : null,
