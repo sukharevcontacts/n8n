@@ -279,22 +279,75 @@ const storesDebug = {
   facts_keys_sample: Array.from(factMap.keys()).slice(0, 10),
 };
 
-// Если stores не пришли — вернём ошибку на каждый пост
+// Если stores не пришли — вернём "skip" по нужным каналам (без channel=undefined)
 if (storesInput.length === 0) {
-  return postsInput.map(post => ({
-    json: {
-      ...post,
-      _tg_targets_empty: true,
-      _tg_targets_reason: `stores input is empty: $items("${POSTGRES_NODE_NAME}") returned 0 rows`,
-      _stores_debug: storesDebug,
+  const outErr = [];
 
-      // важные служебные поля для дальнейшего апдейта Sheets
-      row_number: post?._raw?.row_number ?? null,
-      _now: post._now ?? null,
-      _now_utc: post._now_utc ?? null,
-      _run_key: post._run_key ?? null,
-    },
-  }));
+  for (const post of postsInput) {
+    const rowNumber = post?._raw?.row_number ?? null;
+    const nowLocal = post._now ?? null;
+    const nowUtcIso = post._now_utc ?? null;
+    const runKey = post._run_key ?? null;
+
+    const reason = `stores input is empty: $items("${POSTGRES_NODE_NAME}") returned 0 rows`;
+
+    const needTg = Boolean(post.send_tg);
+    const needMax = Boolean(post.send_max);
+
+    if (needTg) {
+      outErr.push({
+        json: {
+          ...post,
+          channel: 'tg',
+          tg_op: 'skip',
+
+          _tg_targets_empty: true,
+          _tg_targets_reason: reason,
+          _stores_debug: storesDebug,
+
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+        },
+      });
+    }
+
+    if (needMax) {
+      outErr.push({
+        json: {
+          ...post,
+          channel: 'max',
+          max_op: 'skip',
+
+          _max_targets_empty: true,
+          _max_targets_reason: reason,
+          _stores_debug: storesDebug,
+
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+        },
+      });
+    }
+
+    // Если пост вообще не для TG/MAX — оставим как есть (VK/SITE)
+    if (!needTg && !needMax) {
+      outErr.push({
+        json: {
+          ...post,
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+          _stores_debug: storesDebug,
+        },
+      });
+    }
+  }
+
+  return outErr;
 }
 
 // Map store_id -> storeRow
@@ -309,9 +362,9 @@ const out = [];
 
 for (const post of postsInput) {
   // Раньше тут было: if (!post.send_tg) continue;
-  // Теперь: пропускаем VK/SITE посты дальше одним item, а TG-развёртку делаем только когда send_tg=true
+  // Теперь: поддерживаем TG + MAX. VK/SITE пробрасываем одним item, а развёртку делаем только если send_tg/send_max=true
 
-  const hasAnyChannel = Boolean(post.send_tg || post.send_vk || post.send_site);
+  const hasAnyChannel = Boolean(post.send_tg || post.send_max || post.send_vk || post.send_site);
   if (!hasAnyChannel) continue;
 
   // --- протаскиваем row_number (для Update в Sheets) ---
@@ -331,36 +384,124 @@ for (const post of postsInput) {
     const fact = dateKey ? factMap.get(dateKey) : null;
 
     if (!dateKey) {
-      out.push({
-        json: {
-          ...post,
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
+      const needTgGM = Boolean(post.send_tg);
+      const needMaxGM = Boolean(post.send_max);
 
-          _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
-          _goodmorning_date_key: null,
-          _stores_debug: storesDebug,
-        },
-      });
+      if (needTgGM) {
+        out.push({
+          json: {
+            ...post,
+            channel: 'tg',
+            tg_op: 'skip',
+
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
+            _goodmorning_date_key: null,
+            _stores_debug: storesDebug,
+          },
+        });
+      }
+
+      if (needMaxGM) {
+        out.push({
+          json: {
+            ...post,
+            channel: 'max',
+            max_op: 'skip',
+
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
+            _goodmorning_date_key: null,
+            _stores_debug: storesDebug,
+          },
+        });
+      }
+
+      if (!needTgGM && !needMaxGM) {
+        out.push({
+          json: {
+            ...post,
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
+            _goodmorning_date_key: null,
+            _stores_debug: storesDebug,
+          },
+        });
+      }
+
       continue;
     }
 
     if (!fact || !cleanLine(fact)) {
-      out.push({
-        json: {
-          ...post,
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
+      const needTgGM = Boolean(post.send_tg);
+      const needMaxGM = Boolean(post.send_max);
 
-          _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
-          _goodmorning_date_key: dateKey,
-          _stores_debug: storesDebug,
-        },
-      });
+      if (needTgGM) {
+        out.push({
+          json: {
+            ...post,
+            channel: 'tg',
+            tg_op: 'skip',
+
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
+            _goodmorning_date_key: dateKey,
+            _stores_debug: storesDebug,
+          },
+        });
+      }
+
+      if (needMaxGM) {
+        out.push({
+          json: {
+            ...post,
+            channel: 'max',
+            max_op: 'skip',
+
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
+            _goodmorning_date_key: dateKey,
+            _stores_debug: storesDebug,
+          },
+        });
+      }
+
+      if (!needTgGM && !needMaxGM) {
+        out.push({
+          json: {
+            ...post,
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
+            _goodmorning_date_key: dateKey,
+            _stores_debug: storesDebug,
+          },
+        });
+      }
+
       continue;
     }
 
@@ -372,8 +513,11 @@ for (const post of postsInput) {
   }
   // --- /GOODMORNING ---
 
-  // === Если TG не нужен — просто пробрасываем item дальше (для VK/SITE) ===
-  if (!postForText.send_tg) {
+  const needTg = Boolean(postForText.send_tg);
+  const needMax = Boolean(postForText.send_max);
+
+  // === Если TG/MAX не нужны — просто пробрасываем item дальше (для VK/SITE) ===
+  if (!needTg && !needMax) {
     out.push({
       json: {
         ...postForText,
@@ -387,22 +531,45 @@ for (const post of postsInput) {
     continue;
   }
 
-  // === TG часть (как было) ===
   const tzNeed = regionToStoreTz(postForText.region);
   if (tzNeed === null) {
-    out.push({
-      json: {
-        ...postForText,
-        row_number: rowNumber,
-        _now: nowLocal,
-        _now_utc: nowUtcIso,
-        _run_key: runKey,
+    // неизвестный регион — не можем подобрать точки
+    if (needTg) {
+      out.push({
+        json: {
+          ...postForText,
+          channel: 'tg',
+          tg_op: 'skip',
 
-        _tg_targets_empty: true,
-        _tg_targets_reason: `unknown region=${postForText.region}`,
-        _stores_debug: storesDebug,
-      },
-    });
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+
+          _tg_targets_empty: true,
+          _tg_targets_reason: `unknown region=${postForText.region}`,
+          _stores_debug: storesDebug,
+        },
+      });
+    }
+    if (needMax) {
+      out.push({
+        json: {
+          ...postForText,
+          channel: 'max',
+          max_op: 'skip',
+
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+
+          _max_targets_empty: true,
+          _max_targets_reason: `unknown region=${postForText.region}`,
+          _stores_debug: storesDebug,
+        },
+      });
+    }
     continue;
   }
 
@@ -422,174 +589,284 @@ for (const post of postsInput) {
   targetStoreIds = Array.from(new Set(targetStoreIds));
 
   if (targetStoreIds.length === 0) {
-    out.push({
-      json: {
-        ...postForText,
-        row_number: rowNumber,
-        _now: nowLocal,
-        _now_utc: nowUtcIso,
-        _run_key: runKey,
-
-        _tg_targets_empty: true,
-        _tg_targets_reason: postForText.all_region
-          ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
-          : 'no store columns selected in sheet row (no store_* = 1)',
-        _stores_debug: storesDebug,
-      },
-    });
-    continue;
-  }
-
-  const tgBase = buildTgTextAndMode(postForText);
-  const debugMode = Number(postForText.tg_debug) === 1;
-
-  // ---- parse media ----
-  const mediaRaw = (postForText.media_raw ?? postForText.media_url ?? postForText._raw?.media_raw ?? postForText._raw?.media_url ?? '').toString();
-  const mediaArr = parseMediaLines(mediaRaw);
-
-  // old_post parsing (only if present)
-  const oldParsed = parseOldPost(postForText.old_post ?? postForText._raw?.old_post);
-
-  // date part for old_link in region tz
-  const nowUtcObj = nowUtcIso ? new Date(nowUtcIso) : new Date();
-  const datePart = formatDDMMYYYYInTz(nowUtcObj, tzName);
-
-  // базовое решение по типу отправки (без учета caption длины — это сделаем per-store)
-  let baseOp = 'message'; // message | photo | video | media_group
-  let baseMedia = null;
-
-  if (mediaArr.length === 0) {
-    baseOp = 'message';
-  } else if (mediaArr.length === 1) {
-    baseOp = mediaArr[0].type === 'photo' ? 'photo' : 'video';
-    baseMedia = mediaArr[0].media;
-  } else {
-    baseOp = 'media_group';
-  }
-
-  const seenChat = new Set();
-  let produced = 0;
-
-  for (const storeId of targetStoreIds) {
-    const s = storeMap.get(storeId);
-    if (!s) continue;
-    if (Number(s.time_zone) !== tzNeed) continue;
-
-    const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
-    const chatKey = String(chatId);
-    if (seenChat.has(chatKey)) continue;
-    seenChat.add(chatKey);
-
-    // --- old link for this store (depends on storeId) ---
-    const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
-    const tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
-
-    // --- per-store media decision for albums: caption may be too long ---
-    let tgOp = baseOp;
-    let tgMedia = baseMedia;
-    let tgMediaGroup = null;
-    let needExtraTextMessage = false;
-
-    if (baseOp === 'media_group') {
-      tgMediaGroup = mediaArr;
-
-      if (isCaptionOk(tgTextFinal)) {
-        tgMediaGroup = tgMediaGroup.map((m, idx) => {
-          if (idx === 0) {
-            return {
-              ...m,
-              caption: tgTextFinal,
-              parse_mode: tgBase.parse_mode,
-            };
-          }
-          return m;
-        });
-      } else if (tgTextFinal.trim()) {
-        // caption слишком длинный — альбом без caption, а текст отдельным сообщением
-        needExtraTextMessage = true;
-      }
-    }
-
-    // 1) основной item
-    out.push({
-      json: {
-        ...postForText,
-
-        // служебные поля для апдейта Sheets
-        row_number: rowNumber,
-        _now: nowLocal,
-        _now_utc: nowUtcIso,
-        _run_key: runKey,
-
-        // данные цели
-        store_id: storeId,
-        store_description: s.store_description ?? null,
-
-        // routing for telegram
-        tg_op: tgOp,
-        tg_media: tgMedia,
-        tg_media_group: tgMediaGroup,
-
-        // old link debug
-        _old_post_parsed: oldParsed,
-        _old_post_date_ddmmyyyy: datePart,
-        _old_post_link: oldLink,
-
-        tg: {
-          chat_id: chatId,
-          text: tgTextFinal,
-          parse_mode: tgBase.parse_mode,
-          debug: debugMode,
-        },
-
-        _run_key_channel: runKey ? `${runKey}|store:${storeId}` : null,
-        _stores_debug: storesDebug,
-      },
-    });
-
-    produced++;
-
-    // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
-    if (tgOp === 'media_group' && needExtraTextMessage) {
+    if (needTg) {
       out.push({
         json: {
           ...postForText,
+          channel: 'tg',
+          tg_op: 'skip',
 
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
           _run_key: runKey,
 
-          store_id: storeId,
-          store_description: s.store_description ?? null,
-
-          tg_op: 'message',
-          tg_media: null,
-          tg_media_group: null,
-
-          // old link debug
-          _old_post_parsed: oldParsed,
-          _old_post_date_ddmmyyyy: datePart,
-          _old_post_link: oldLink,
-
-          tg: {
-            chat_id: chatId,
-            text: tgTextFinal,
-            parse_mode: tgBase.parse_mode,
-            debug: debugMode,
-          },
-
-          _run_key_channel: runKey ? `${runKey}|store:${storeId}|text_after_album` : null,
+          _tg_targets_empty: true,
+          _tg_targets_reason: postForText.all_region
+            ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
+            : 'no store columns selected in sheet row (no store_* = 1)',
           _stores_debug: storesDebug,
         },
       });
     }
+    if (needMax) {
+      out.push({
+        json: {
+          ...postForText,
+          channel: 'max',
+          max_op: 'skip',
+
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+
+          _max_targets_empty: true,
+          _max_targets_reason: postForText.all_region
+            ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
+            : 'no store columns selected in sheet row (no store_* = 1)',
+          _stores_debug: storesDebug,
+        },
+      });
+    }
+    continue;
   }
 
-  if (produced === 0) {
+  // ---- parse media ----
+  const mediaRaw = (postForText.media_raw ?? postForText.media_url ?? postForText._raw?.media_raw ?? postForText._raw?.media_url ?? '').toString();
+  const mediaArr = parseMediaLines(mediaRaw);
+
+  // old_post parsing (only if present) — используется только для TG deep-link
+  const oldParsed = parseOldPost(postForText.old_post ?? postForText._raw?.old_post);
+
+  // date part for old_link in region tz
+  const nowUtcObj = nowUtcIso ? new Date(nowUtcIso) : new Date();
+  const datePart = formatDDMMYYYYInTz(nowUtcObj, tzName);
+
+  // --- TG prep (как было) ---
+  const tgBase = needTg ? buildTgTextAndMode(postForText) : null;
+  const debugMode = needTg ? (Number(postForText.tg_debug) === 1) : false;
+
+  // базовое решение по типу отправки (TG)
+  let baseOpTg = 'message'; // message | photo | video | media_group
+  let baseMediaTg = null;
+
+  if (mediaArr.length === 0) {
+    baseOpTg = 'message';
+  } else if (mediaArr.length === 1) {
+    baseOpTg = mediaArr[0].type === 'photo' ? 'photo' : 'video';
+    baseMediaTg = mediaArr[0].media;
+  } else {
+    baseOpTg = 'media_group';
+  }
+
+  // --- MAX prep ---
+  // MAX API: photo -> image (type=image)
+  const mediaArrMax = mediaArr.map(m => ({
+    type: m.type === 'photo' ? 'image' : 'video',
+    media: m.media,
+  }));
+
+  let baseOpMax = 'message'; // message | image | video | media_group
+  let baseMediaMax = null;
+
+  if (mediaArrMax.length === 0) {
+    baseOpMax = 'message';
+  } else if (mediaArrMax.length === 1) {
+    baseOpMax = mediaArrMax[0].type === 'image' ? 'image' : 'video';
+    baseMediaMax = mediaArrMax[0].media;
+  } else {
+    baseOpMax = 'media_group';
+  }
+
+  const seenChat = new Set(); // TG dedupe by chat_id
+  const seenMax = new Set();  // MAX dedupe by max_channel_id
+
+  let producedTg = 0;
+  let producedMax = 0;
+
+  for (const storeId of targetStoreIds) {
+    const s = storeMap.get(storeId);
+    if (!s) continue;
+    if (Number(s.time_zone) !== tzNeed) continue;
+
+    // ---------------- TG ----------------
+    if (needTg) {
+      const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
+      const chatKey = String(chatId);
+      if (!chatId) {
+        // если нет chat_id — пропускаем
+      } else if (!seenChat.has(chatKey)) {
+        seenChat.add(chatKey);
+
+        // --- old link for this store (depends on storeId) ---
+        const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
+        const tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
+
+        // --- per-store media decision for albums: caption may be too long ---
+        let tgOp = baseOpTg;
+        let tgMedia = baseMediaTg;
+        let tgMediaGroup = null;
+        let needExtraTextMessage = false;
+
+        if (baseOpTg === 'media_group') {
+          tgMediaGroup = mediaArr;
+
+          if (isCaptionOk(tgTextFinal)) {
+            tgMediaGroup = tgMediaGroup.map((m, idx) => {
+              if (idx === 0) {
+                return {
+                  ...m,
+                  caption: tgTextFinal,
+                  parse_mode: tgBase.parse_mode,
+                };
+              }
+              return m;
+            });
+          } else if (tgTextFinal.trim()) {
+            // caption слишком длинный — альбом без caption, а текст отдельным сообщением
+            needExtraTextMessage = true;
+          }
+        }
+
+        // 1) основной item
+        out.push({
+          json: {
+            ...postForText,
+
+            channel: 'tg',
+
+            // служебные поля для апдейта Sheets
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            // данные цели
+            store_id: storeId,
+            store_description: s.store_description ?? null,
+
+            // routing for telegram
+            tg_op: tgOp,
+            tg_media: tgMedia,
+            tg_media_group: tgMediaGroup,
+
+            // old link debug
+            _old_post_parsed: oldParsed,
+            _old_post_date_ddmmyyyy: datePart,
+            _old_post_link: oldLink,
+
+            tg: {
+              chat_id: chatId,
+              text: tgTextFinal,
+              parse_mode: tgBase.parse_mode,
+              debug: debugMode,
+            },
+
+            _run_key_channel: runKey ? `${runKey}|tg|store:${storeId}` : null,
+            _stores_debug: storesDebug,
+          },
+        });
+
+        producedTg++;
+
+        // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
+        if (tgOp === 'media_group' && needExtraTextMessage) {
+          out.push({
+            json: {
+              ...postForText,
+
+              channel: 'tg',
+
+              row_number: rowNumber,
+              _now: nowLocal,
+              _now_utc: nowUtcIso,
+              _run_key: runKey,
+
+              store_id: storeId,
+              store_description: s.store_description ?? null,
+
+              tg_op: 'message',
+              tg_media: null,
+              tg_media_group: null,
+
+              // old link debug
+              _old_post_parsed: oldParsed,
+              _old_post_date_ddmmyyyy: datePart,
+              _old_post_link: oldLink,
+
+              tg: {
+                chat_id: chatId,
+                text: tgTextFinal,
+                parse_mode: tgBase.parse_mode,
+                debug: debugMode,
+              },
+
+              _run_key_channel: runKey ? `${runKey}|tg|store:${storeId}|text_after_album` : null,
+              _stores_debug: storesDebug,
+            },
+          });
+        }
+      }
+    }
+
+    // ---------------- MAX ----------------
+    if (needMax) {
+      const maxChannelId = s.max_channel_id;
+      const maxKey = String(maxChannelId ?? '');
+      if (!maxChannelId) {
+        // нет канала MAX у точки — пропускаем
+      } else if (!seenMax.has(maxKey)) {
+        seenMax.add(maxKey);
+
+        let maxOp = baseOpMax;
+        let maxMedia = baseMediaMax;
+        let maxMediaGroup = null;
+
+        if (baseOpMax === 'media_group') {
+          maxMediaGroup = mediaArrMax;
+        }
+
+        out.push({
+          json: {
+            ...postForText,
+
+            channel: 'max',
+
+            row_number: rowNumber,
+            _now: nowLocal,
+            _now_utc: nowUtcIso,
+            _run_key: runKey,
+
+            store_id: storeId,
+            store_description: s.store_description ?? null,
+
+            max_op: maxOp,
+            max_media: maxMedia,
+            max_media_group: maxMediaGroup,
+
+            max: {
+              channel_id: maxChannelId,
+              text: (postForText.text ?? '').toString(),
+            },
+
+            _run_key_channel: runKey ? `${runKey}|max|store:${storeId}` : null,
+            _stores_debug: storesDebug,
+          },
+        });
+
+        producedMax++;
+      }
+    }
+  }
+
+  if (needTg && producedTg === 0) {
     out.push({
       json: {
         ...postForText,
+        channel: 'tg',
+        tg_op: 'skip',
+
         row_number: rowNumber,
         _now: nowLocal,
         _now_utc: nowUtcIso,
@@ -597,6 +874,25 @@ for (const post of postsInput) {
 
         _tg_targets_empty: true,
         _tg_targets_reason: `stores selected but none matched mapping for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`,
+        _stores_debug: storesDebug,
+      },
+    });
+  }
+
+  if (needMax && producedMax === 0) {
+    out.push({
+      json: {
+        ...postForText,
+        channel: 'max',
+        max_op: 'skip',
+
+        row_number: rowNumber,
+        _now: nowLocal,
+        _now_utc: nowUtcIso,
+        _run_key: runKey,
+
+        _max_targets_empty: true,
+        _max_targets_reason: `stores selected but none matched MAX mapping for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`,
         _stores_debug: storesDebug,
       },
     });
