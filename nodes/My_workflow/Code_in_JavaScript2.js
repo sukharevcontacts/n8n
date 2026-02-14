@@ -279,75 +279,22 @@ const storesDebug = {
   facts_keys_sample: Array.from(factMap.keys()).slice(0, 10),
 };
 
-// Если stores не пришли — вернём "skip" по нужным каналам (без channel=undefined)
+// Если stores не пришли — вернём ошибку на каждый пост
 if (storesInput.length === 0) {
-  const outErr = [];
+  return postsInput.map(post => ({
+    json: {
+      ...post,
+      _tg_targets_empty: true,
+      _tg_targets_reason: `stores input is empty: $items("${POSTGRES_NODE_NAME}") returned 0 rows`,
+      _stores_debug: storesDebug,
 
-  for (const post of postsInput) {
-    const rowNumber = post?._raw?.row_number ?? null;
-    const nowLocal = post._now ?? null;
-    const nowUtcIso = post._now_utc ?? null;
-    const runKey = post._run_key ?? null;
-
-    const reason = `stores input is empty: $items("${POSTGRES_NODE_NAME}") returned 0 rows`;
-
-    const needTg = Boolean(post.send_tg);
-    const needMax = Boolean(post.send_max);
-
-    if (needTg) {
-      outErr.push({
-        json: {
-          ...post,
-          channel: 'tg',
-          tg_op: 'skip',
-
-          _tg_targets_empty: true,
-          _tg_targets_reason: reason,
-          _stores_debug: storesDebug,
-
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
-        },
-      });
-    }
-
-    if (needMax) {
-      outErr.push({
-        json: {
-          ...post,
-          channel: 'max',
-          max_op: 'skip',
-
-          _max_targets_empty: true,
-          _max_targets_reason: reason,
-          _stores_debug: storesDebug,
-
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
-        },
-      });
-    }
-
-    // Если пост вообще не для TG/MAX — оставим как есть (VK/SITE)
-    if (!needTg && !needMax) {
-      outErr.push({
-        json: {
-          ...post,
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
-          _stores_debug: storesDebug,
-        },
-      });
-    }
-  }
-
-  return outErr;
+      // важные служебные поля для дальнейшего апдейта Sheets
+      row_number: post?._raw?.row_number ?? null,
+      _now: post._now ?? null,
+      _now_utc: post._now_utc ?? null,
+      _run_key: post._run_key ?? null,
+    },
+  }));
 }
 
 // Map store_id -> storeRow
@@ -384,124 +331,36 @@ for (const post of postsInput) {
     const fact = dateKey ? factMap.get(dateKey) : null;
 
     if (!dateKey) {
-      const needTgGM = Boolean(post.send_tg);
-      const needMaxGM = Boolean(post.send_max);
+      out.push({
+        json: {
+          ...post,
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
 
-      if (needTgGM) {
-        out.push({
-          json: {
-            ...post,
-            channel: 'tg',
-            tg_op: 'skip',
-
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
-            _goodmorning_date_key: null,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
-
-      if (needMaxGM) {
-        out.push({
-          json: {
-            ...post,
-            channel: 'max',
-            max_op: 'skip',
-
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
-            _goodmorning_date_key: null,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
-
-      if (!needTgGM && !needMaxGM) {
-        out.push({
-          json: {
-            ...post,
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
-            _goodmorning_date_key: null,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
-
+          _prepare_error: `GOODMORNING: cannot determine date key from occurrence/publish fields`,
+          _goodmorning_date_key: null,
+          _stores_debug: storesDebug,
+        },
+      });
       continue;
     }
 
     if (!fact || !cleanLine(fact)) {
-      const needTgGM = Boolean(post.send_tg);
-      const needMaxGM = Boolean(post.send_max);
+      out.push({
+        json: {
+          ...post,
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
 
-      if (needTgGM) {
-        out.push({
-          json: {
-            ...post,
-            channel: 'tg',
-            tg_op: 'skip',
-
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
-            _goodmorning_date_key: dateKey,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
-
-      if (needMaxGM) {
-        out.push({
-          json: {
-            ...post,
-            channel: 'max',
-            max_op: 'skip',
-
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
-            _goodmorning_date_key: dateKey,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
-
-      if (!needTgGM && !needMaxGM) {
-        out.push({
-          json: {
-            ...post,
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
-            _goodmorning_date_key: dateKey,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
-
+          _prepare_error: `GOODMORNING: no fact found for date=${dateKey} in COOP_FACT`,
+          _goodmorning_date_key: dateKey,
+          _stores_debug: storesDebug,
+        },
+      });
       continue;
     }
 
@@ -538,9 +397,6 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...postForText,
-          channel: 'tg',
-          tg_op: 'skip',
-
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -548,24 +404,6 @@ for (const post of postsInput) {
 
           _tg_targets_empty: true,
           _tg_targets_reason: `unknown region=${postForText.region}`,
-          _stores_debug: storesDebug,
-        },
-      });
-    }
-    if (needMax) {
-      out.push({
-        json: {
-          ...postForText,
-          channel: 'max',
-          max_op: 'skip',
-
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
-
-          _max_targets_empty: true,
-          _max_targets_reason: `unknown region=${postForText.region}`,
           _stores_debug: storesDebug,
         },
       });
@@ -593,9 +431,6 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...postForText,
-          channel: 'tg',
-          tg_op: 'skip',
-
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -603,26 +438,6 @@ for (const post of postsInput) {
 
           _tg_targets_empty: true,
           _tg_targets_reason: postForText.all_region
-            ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
-            : 'no store columns selected in sheet row (no store_* = 1)',
-          _stores_debug: storesDebug,
-        },
-      });
-    }
-    if (needMax) {
-      out.push({
-        json: {
-          ...postForText,
-          channel: 'max',
-          max_op: 'skip',
-
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
-
-          _max_targets_empty: true,
-          _max_targets_reason: postForText.all_region
             ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
             : 'no store columns selected in sheet row (no store_* = 1)',
           _stores_debug: storesDebug,
@@ -864,9 +679,6 @@ for (const post of postsInput) {
     out.push({
       json: {
         ...postForText,
-        channel: 'tg',
-        tg_op: 'skip',
-
         row_number: rowNumber,
         _now: nowLocal,
         _now_utc: nowUtcIso,
@@ -874,25 +686,6 @@ for (const post of postsInput) {
 
         _tg_targets_empty: true,
         _tg_targets_reason: `stores selected but none matched mapping for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`,
-        _stores_debug: storesDebug,
-      },
-    });
-  }
-
-  if (needMax && producedMax === 0) {
-    out.push({
-      json: {
-        ...postForText,
-        channel: 'max',
-        max_op: 'skip',
-
-        row_number: rowNumber,
-        _now: nowLocal,
-        _now_utc: nowUtcIso,
-        _run_key: runKey,
-
-        _max_targets_empty: true,
-        _max_targets_reason: `stores selected but none matched MAX mapping for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`,
         _stores_debug: storesDebug,
       },
     });

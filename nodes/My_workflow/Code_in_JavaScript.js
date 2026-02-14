@@ -17,7 +17,7 @@ return items.map(item => {
   const titleStr = (d.title ?? '').toString();
   const titleNorm = titleStr.trim().toUpperCase();
 
-  // NEW: marker for "GOODMORNING" posts (text will be taken from COOP_FACT later in Expand per store)
+  // marker for "GOODMORNING" posts (text will be taken from COOP_FACT later in Expand per store)
   const isGoodMorning = titleNorm === 'GOODMORNING';
 
   return {
@@ -28,7 +28,7 @@ return items.map(item => {
       post_type: num(d.post_type),
 
       send_tg: bool1(d.send_tg),
-      send_max: bool1(d.send_max), // NEW
+      send_max: bool1(d.send_max),
       send_vk: bool1(d.send_vk),
       send_site: bool1(d.send_site),
 
@@ -40,6 +40,9 @@ return items.map(item => {
       parse_mode: num(d.parse_mode) ?? 0,
 
       media_raw: d.media_url ?? '',
+
+      // NEW: raw order link (format "Button title|https://...")
+      order_link: strOrNull(d.order_link),
 
       // старая логика: ссылка на бота (формат "197_КУПИТЬ")
       old_post: strOrNull(d.old_post),
@@ -60,7 +63,7 @@ return items.map(item => {
 
       error: strOrNull(d.error),
 
-      // NEW: flag for downstream logic
+      // flag for downstream logic
       _goodmorning: isGoodMorning,
 
       // исходная строка целиком (включая колонки точек)
