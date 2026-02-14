@@ -123,7 +123,7 @@ function appendOldLinkToText(text, oldLink) {
   return `${base}\n\n${oldLink}`;
 }
 
-// --- NEW: Invite footer helpers ---
+// --- Invite footer helpers ---
 function cleanUrl(v) {
   const s = String(v ?? '').trim();
   return s ? s : null;
@@ -142,13 +142,14 @@ function buildLinkLabel(label, url, parseMode) {
   return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }
 
+// UPDATED: labels without "на канал"
 function buildInviteFooter(parseMode, tgUrl, maxUrl) {
   const lines = [];
 
-  const tgLine = buildLinkLabel('Подпишись на канал в Telegram', tgUrl, parseMode);
+  const tgLine = buildLinkLabel('📢 Подпишись в Telegram', tgUrl, parseMode);
   if (tgLine) lines.push(tgLine);
 
-  const maxLine = buildLinkLabel('Подпишись на канал в MAX', maxUrl, parseMode);
+  const maxLine = buildLinkLabel('⚡ Подпишись в MAX', maxUrl, parseMode);
   if (maxLine) lines.push(maxLine);
 
   return lines.length ? lines.join('\n') : null;
@@ -372,9 +373,6 @@ for (const s of storesInput) {
 const out = [];
 
 for (const post of postsInput) {
-  // Раньше тут было: if (!post.send_tg) continue;
-  // Теперь: поддерживаем TG + MAX. VK/SITE пробрасываем одним item, а развёртку делаем только если send_tg/send_max=true
-
   const hasAnyChannel = Boolean(post.send_tg || post.send_max || post.send_vk || post.send_site);
   if (!hasAnyChannel) continue;
 
@@ -584,6 +582,10 @@ for (const post of postsInput) {
     if (!s) continue;
     if (Number(s.time_zone) !== tzNeed) continue;
 
+    const tgInvExptEmpty = !String(postForText.tg_inv_expt ?? '').trim();
+    const tgInvite = tgInvExptEmpty ? cleanUrl(s.tg_invite_url_channel_friend) : null;
+    const maxInvite = tgInvExptEmpty ? cleanUrl(s.max_invite_url_channel_friend) : null;
+
     // ---------------- TG ----------------
     if (needTg) {
       const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
@@ -596,14 +598,10 @@ for (const post of postsInput) {
         // --- old link for this store (depends on storeId) ---
         const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
 
-        // --- text final: old link + (NEW) invite footer ---
+        // --- text final: old link + invite footer ---
         let tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
 
-        // NEW: invite footer when tg_inv_expt is empty
-        const tgInvExptEmpty = !String(postForText.tg_inv_expt ?? '').trim();
         if (tgInvExptEmpty) {
-          const tgInvite = cleanUrl(s.tg_invite_url_channel_friend);
-          const maxInvite = cleanUrl(s.max_invite_url_channel_friend);
           const footer = buildInviteFooter(tgBase.parse_mode, tgInvite, maxInvite);
           tgTextFinal = appendFooter(tgTextFinal, footer);
         }
@@ -738,6 +736,28 @@ for (const post of postsInput) {
           maxMediaGroup = mediaArrMax;
         }
 
+        // NEW: MAX text + invite footer
+        let maxTextFinal = (postForText.text ?? '').toString();
+
+        if (tgInvExptEmpty) {
+          const lines = [];
+
+          if (tgInvite) {
+            lines.push(`📢 Подпишись в Telegram\n${tgInvite}`);
+          }
+
+          if (maxInvite) {
+            lines.push(`⚡ Подпишись в MAX\n${maxInvite}`);
+          }
+
+          if (lines.length) {
+            const footer = lines.join('\n\n');
+            maxTextFinal = maxTextFinal.trim()
+              ? `${maxTextFinal}\n\n${footer}`
+              : footer;
+          }
+        }
+
         out.push({
           json: {
             ...postForText,
@@ -761,7 +781,7 @@ for (const post of postsInput) {
 
             max: {
               channel_id: maxChannelId,
-              text: (postForText.text ?? '').toString(),
+              text: maxTextFinal,
             },
 
             _run_key_channel: runKey ? `${runKey}|max|store:${storeId}` : null,
