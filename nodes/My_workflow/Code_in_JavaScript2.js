@@ -172,8 +172,16 @@ function buildOrderLinksText(orderLinks, parseMode) {
     const u = cleanLine(b?.url);
     if (!t || !u) continue;
 
-    const link = buildLinkLabel(t, u, parseMode);
+    let link = buildLinkLabel(t, u, parseMode);
     if (!link) continue;
+
+    // Make order_links bold in Telegram
+    if (parseMode === 'MarkdownV2') {
+      link = `**${link}**`;
+    } else {
+      // HTML
+      link = `<b>${link}</b>`;
+    }
 
     lines.push(`• ${link}`);
   }
