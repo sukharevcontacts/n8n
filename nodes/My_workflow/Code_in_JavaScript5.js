@@ -1,70 +1,98 @@
-const items = $input.all().map(x => x.json);
+/**
+ * Build MAX /messages payload PER STORE (PER chat_id)
+ *
+ * Input: items after Code in JavaScript4
+ *   (там уже есть token для каждого media, и проброшен контекст store_id/chat_id/text/order_links/...)
+ *
+ * Output: MANY items — по одному на точку/чат.
+ */
 
-// порядок как в исходной строке
-items.sort((a, b) => (a.idx ?? 0) - (b.idx ?? 0));
+const rows = $input.all().map(x => x.json ?? {});
 
-// "шапка" — ВАЖНО: здесь лежит контекст (post_id/row_number/_run_key/send_max/...)
-const first = items[0] || {};
-
-// куда отправлять
-const chatId = first.chat_id ?? first.max?.channel_id ?? first.max_channel_id ?? null;
-
-// текст поста
-const text = (first.max?.text ?? first.text ?? '').toString();
-
-// медиа-вложения
-const mediaAttachments = items
-  .filter(x => x.token && x.mediaType)
-  .map(x => ({
-    type: x.mediaType,          // "image" или "video"
-    payload: { token: x.token }
-  }));
-
-// ===============================
-// 🔹 ДИНАМИЧЕСКИЕ КНОПКИ ИЗ order_links
-// ===============================
-const orderLinks = Array.isArray(first.order_links) ? first.order_links : null;
-
-let keyboardAttachment = null;
-
-if (orderLinks && orderLinks.length) {
-  // очищаем мусор + минимальная валидация
-  const clean = orderLinks
+// --- helpers ---
+function normButtons(orderLinks) {
+  const arr = Array.isArray(orderLinks) ? orderLinks : [];
+  const clean = arr
     .map(b => ({
       text: (b?.text ?? '').toString().trim(),
       url: (b?.url ?? '').toString().trim(),
     }))
     .filter(b => b.text && b.url && /^https?:\/\//i.test(b.url));
 
-  if (clean.length) {
-    // В MAX максимум 3 кнопки в ряд.
-    // Самый безопасный вариант — по 1 кнопке в ряд.
-    const buttons = clean.map(b => ([
-      { type: "link", text: b.text, url: b.url }
-    ]));
+  if (!clean.length) return null;
 
-    keyboardAttachment = {
-      type: "inline_keyboard",
-      payload: { buttons }
-    };
-  }
+  // MAX: безопасно по 1 кнопке в ряд
+  return {
+    type: "inline_keyboard",
+    payload: {
+      buttons: clean.map(b => ([{ type: "link", text: b.text, url: b.url }]))
+    }
+  };
 }
 
-// собираем итоговые attachments
-const attachments = [...mediaAttachments];
-if (keyboardAttachment) attachments.push(keyboardAttachment);
+function groupKey(p) {
+  const postId = p.post_id ?? p.id ?? '';
+  const storeId = p.store_id ?? '';
+  const chatId = p.chat_id ?? p.max?.channel_id ?? p.max_channel_id ?? '';
+  return `${postId}::${storeId}::${chatId}`;
+}
 
-// ВАЖНО: возвращаем ВЕСЬ контекст из first, чтобы после Send Message1 можно было merge'ить и собирать результаты
-return [{
-  json: {
-    // ✅ сохраняем контекст (post_id/row_number/_run_key/send_max/order_links/и т.д.)
-    ...first,
+// --- group by store/chat ---
+const groups = new Map();
+for (const p of rows) {
+  const k = groupKey(p);
+  if (!groups.has(k)) groups.set(k, []);
+  groups.get(k).push(p);
+}
 
-    // ✅ перезаписываем/добавляем поля отправки
-    chat_id: chatId,
-    text,
-    format: "markdown",
-    notify: true,
-    attachments,
+// --- build one message per group ---
+const out = [];
+
+for (const [k, items] of groups.entries()) {
+  // сортировка по idx чтобы медиа были в правильном порядке
+  items.sort((a, b) => (a.idx ?? 0) - (b.idx ?? 0));
+
+  const first = items[0] || {};
+  const chatId =
+    first.chat_id ??
+    first.max?.channel_id ??
+    first.max_channel_id ??
+    null;
+
+  if (!chatId) {
+    // если вдруг нет chat_id — просто пропускаем, чтобы не падать
+    continue;
   }
-}];
+
+  const text = (first.max?.text ?? first.text ?? '').toString();
+
+  // медиа-вложения (только там где есть token+mediaType)
+  const mediaAttachments = items
+    .filter(x => x.token && x.mediaType)
+    .map(x => ({
+      type: x.mediaType, // "image" | "video"
+      payload: { token: x.token }
+    }));
+
+  // кнопки из order_links
+  const keyboardAttachment = normButtons(first.order_links);
+
+  const attachments = [...mediaAttachments];
+  if (keyboardAttachment) attachments.push(keyboardAttachment);
+
+  out.push({
+    json: {
+      // ✅ сохраняем ВЕСЬ контекст (важно для Collect MAX results / финального мерджа)
+      ...first,
+
+      // ✅ поля отправки
+      chat_id: chatId,
+      text,
+      format: "markdown",
+      notify: true,
+      attachments,
+    }
+  });
+}
+
+return out;
