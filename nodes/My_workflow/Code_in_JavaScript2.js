@@ -146,6 +146,31 @@ function cleanLine(s) {
     .trim();
 }
 
+function parseOrderLinks(orderLinkRaw) {
+  const raw = (orderLinkRaw ?? '').toString();
+  const lines = raw.split(/\r\n|\n|\r/g).map(cleanLine).filter(Boolean);
+
+  const out = [];
+  for (const line of lines) {
+    // Format: Button text|https://...
+    const parts = line.split('|');
+    if (parts.length < 2) continue;
+
+    const text = cleanLine(parts[0]);
+    const url = cleanLine(parts.slice(1).join('|')); // keep '|' inside URL if any
+
+    if (!text || !url) continue;
+
+    // minimal url sanity check
+    if (!/^https?:\/\//i.test(url)) continue;
+
+    out.push({ text, url });
+  }
+
+  return out.length ? out : null;
+}
+
+
 /**
  * media_raw format (each line):
  *   ф|https://...
@@ -284,6 +309,8 @@ if (storesInput.length === 0) {
   return postsInput.map(post => ({
     json: {
       ...post,
+      // NEW
+      order_links: parseOrderLinks(post.order_link ?? post._raw?.order_link),
       _tg_targets_empty: true,
       _tg_targets_reason: `stores input is empty: $items("${POSTGRES_NODE_NAME}") returned 0 rows`,
       _stores_debug: storesDebug,
@@ -334,6 +361,8 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...post,
+          // NEW
+          order_links: parseOrderLinks(post.order_link ?? post._raw?.order_link),
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -351,6 +380,8 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...post,
+          // NEW
+          order_links: parseOrderLinks(post.order_link ?? post._raw?.order_link),
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -375,11 +406,18 @@ for (const post of postsInput) {
   const needTg = Boolean(postForText.send_tg);
   const needMax = Boolean(postForText.send_max);
 
+  // NEW: parse order links (multi-line: Text|URL)
+  const order_links = parseOrderLinks(postForText.order_link ?? postForText._raw?.order_link);
+
   // === Если TG/MAX не нужны — просто пробрасываем item дальше (для VK/SITE) ===
   if (!needTg && !needMax) {
     out.push({
       json: {
         ...postForText,
+
+            // NEW
+            order_links,
+
         row_number: rowNumber,
         _now: nowLocal,
         _now_utc: nowUtcIso,
@@ -397,6 +435,8 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...postForText,
+          // NEW
+          order_links,
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -431,6 +471,8 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...postForText,
+          // NEW
+          order_links,
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -549,6 +591,9 @@ for (const post of postsInput) {
           json: {
             ...postForText,
 
+            // NEW
+            order_links,
+
             channel: 'tg',
 
             // служебные поля для апдейта Sheets
@@ -590,6 +635,9 @@ for (const post of postsInput) {
           out.push({
             json: {
               ...postForText,
+
+              // NEW
+              order_links,
 
               channel: 'tg',
 
@@ -646,6 +694,9 @@ for (const post of postsInput) {
           json: {
             ...postForText,
 
+            // NEW
+            order_links,
+
             channel: 'max',
 
             row_number: rowNumber,
@@ -679,6 +730,8 @@ for (const post of postsInput) {
     out.push({
       json: {
         ...postForText,
+        // NEW
+        order_links,
         row_number: rowNumber,
         _now: nowLocal,
         _now_utc: nowUtcIso,
