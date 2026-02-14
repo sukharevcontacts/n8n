@@ -28,6 +28,7 @@ return items.map(item => {
       post_type: num(d.post_type),
 
       send_tg: bool1(d.send_tg),
+      send_max: bool1(d.send_max), // NEW
       send_vk: bool1(d.send_vk),
       send_site: bool1(d.send_site),
 
