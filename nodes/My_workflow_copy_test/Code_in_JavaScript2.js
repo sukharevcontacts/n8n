@@ -162,33 +162,6 @@ function appendFooter(text, footer) {
   return `${base}\n\n${footer}`;
 }
 
-// --- Order links as TEXT block (for Telegram post_auth_type=1) ---
-function buildOrderLinksText(orderLinks, parseMode) {
-  if (!Array.isArray(orderLinks) || orderLinks.length === 0) return null;
-
-  const lines = [];
-  for (const b of orderLinks) {
-    const t = cleanLine(b?.text);
-    const u = cleanLine(b?.url);
-    if (!t || !u) continue;
-
-    const link = buildLinkLabel(t, u, parseMode);
-    if (!link) continue;
-
-    lines.push(`• ${link}`);
-  }
-
-  return lines.length ? lines.join('\n') : null;
-}
-
-function appendOrderLinksToText(text, orderLinks, parseMode) {
-  const base = (text ?? '').toString();
-  const block = buildOrderLinksText(orderLinks, parseMode);
-  if (!block) return base;
-  if (!base.trim()) return block;
-  return `${base}\n\n${block}`;
-}
-
 // Ваш формат: store_195_Большевистская
 function pickStoreIdsFromRaw(raw) {
   const ids = [];
@@ -622,28 +595,11 @@ for (const post of postsInput) {
       } else if (!seenChat.has(chatKey)) {
         seenChat.add(chatKey);
 
-        const authType1 = Number((postForText.post_auth_type ?? s.post_auth_type)) === 1;
-
         // --- old link for this store (depends on storeId) ---
-        // IMPORTANT: if post_auth_type = 1 -> ignore old_post completely
-        const oldLink = (!authType1 && oldParsed)
-          ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode)
-          : null;
+        const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
 
-        // --- text final (Telegram) ---
-        // post_auth_type = 1:
-        //   - base text
-        //   - then order_links block (from order_link)
-        //   - then invite footer (if enabled)
-        // else:
-        //   - current behavior (oldLink + footer)
-        let tgTextFinal = tgBase.text;
-
-        if (authType1) {
-          tgTextFinal = appendOrderLinksToText(tgTextFinal, order_links, tgBase.parse_mode);
-        } else {
-          tgTextFinal = appendOldLinkToText(tgTextFinal, oldLink);
-        }
+        // --- text final: old link + invite footer ---
+        let tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
 
         if (tgInvExptEmpty) {
           const footer = buildInviteFooter(tgBase.parse_mode, tgInvite, maxInvite);
