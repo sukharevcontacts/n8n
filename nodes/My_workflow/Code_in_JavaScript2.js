@@ -123,6 +123,44 @@ function appendOldLinkToText(text, oldLink) {
   return `${base}\n\n${oldLink}`;
 }
 
+// --- NEW: Invite footer helpers ---
+function cleanUrl(v) {
+  const s = String(v ?? '').trim();
+  return s ? s : null;
+}
+
+function buildLinkLabel(label, url, parseMode) {
+  if (!url) return null;
+
+  if (parseMode === 'MarkdownV2') {
+    const t = escapeMarkdownV2(label);
+    const u = String(url).replace(/\)/g, '\\)').replace(/\(/g, '\\(');
+    return `[${t}](${u})`;
+  }
+
+  // HTML
+  return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
+}
+
+function buildInviteFooter(parseMode, tgUrl, maxUrl) {
+  const lines = [];
+
+  const tgLine = buildLinkLabel('Подпишись на канал в Telegram', tgUrl, parseMode);
+  if (tgLine) lines.push(tgLine);
+
+  const maxLine = buildLinkLabel('Подпишись на канал в MAX', maxUrl, parseMode);
+  if (maxLine) lines.push(maxLine);
+
+  return lines.length ? lines.join('\n') : null;
+}
+
+function appendFooter(text, footer) {
+  const base = (text ?? '').toString();
+  if (!footer) return base;
+  if (!base.trim()) return footer;
+  return `${base}\n\n${footer}`;
+}
+
 // Ваш формат: store_195_Большевистская
 function pickStoreIdsFromRaw(raw) {
   const ids = [];
@@ -169,7 +207,6 @@ function parseOrderLinks(orderLinkRaw) {
 
   return out.length ? out : null;
 }
-
 
 /**
  * media_raw format (each line):
@@ -415,8 +452,8 @@ for (const post of postsInput) {
       json: {
         ...postForText,
 
-            // NEW
-            order_links,
+        // NEW
+        order_links,
 
         row_number: rowNumber,
         _now: nowLocal,
@@ -558,7 +595,18 @@ for (const post of postsInput) {
 
         // --- old link for this store (depends on storeId) ---
         const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
-        const tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
+
+        // --- text final: old link + (NEW) invite footer ---
+        let tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
+
+        // NEW: invite footer when tg_inv_expt is empty
+        const tgInvExptEmpty = !String(postForText.tg_inv_expt ?? '').trim();
+        if (tgInvExptEmpty) {
+          const tgInvite = cleanUrl(s.tg_invite_url_channel_friend);
+          const maxInvite = cleanUrl(s.max_invite_url_channel_friend);
+          const footer = buildInviteFooter(tgBase.parse_mode, tgInvite, maxInvite);
+          tgTextFinal = appendFooter(tgTextFinal, footer);
+        }
 
         // --- per-store media decision for albums: caption may be too long ---
         let tgOp = baseOpTg;

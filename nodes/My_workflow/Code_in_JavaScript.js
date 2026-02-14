@@ -44,6 +44,9 @@ return items.map(item => {
       // NEW: raw order link (format "Button title|https://...")
       order_link: strOrNull(d.order_link),
 
+      // NEW: TG invite experiment flag (if empty -> add invite footer later)
+      tg_inv_expt: strOrNull(d.tg_inv_expt),
+
       // старая логика: ссылка на бота (формат "197_КУПИТЬ")
       old_post: strOrNull(d.old_post),
 
