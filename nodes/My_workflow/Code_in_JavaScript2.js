@@ -32,7 +32,7 @@ function escapeHtml(s) {
 // минимально достаточное экранирование MarkdownV2
 function escapeMarkdownV2(s) {
   // Telegram MarkdownV2 special chars: _ * [ ] ( ) ~ ` > # + - = | { } . !
-  return String(s ?? '').replace(/[_*\[\]()~`>#+\-=|{}.!]/g, '\\$&');
+  return String(s ?? '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
 function buildTgTextAndMode(post) {
@@ -308,8 +308,10 @@ for (const s of storesInput) {
 const out = [];
 
 for (const post of postsInput) {
-  // Теперь учитываем MAX тоже
-  const hasAnyChannel = Boolean(post.send_tg || post.send_vk || post.send_site || post.send_max);
+  // Раньше тут было: if (!post.send_tg) continue;
+  // Теперь: пропускаем VK/SITE посты дальше одним item, а TG-развёртку делаем только когда send_tg=true
+
+  const hasAnyChannel = Boolean(post.send_tg || post.send_vk || post.send_site);
   if (!hasAnyChannel) continue;
 
   // --- протаскиваем row_number (для Update в Sheets) ---
@@ -370,9 +372,8 @@ for (const post of postsInput) {
   }
   // --- /GOODMORNING ---
 
-  // === Если не нужен per-store (TG/MAX), просто пробрасываем item дальше (для VK/SITE) ===
-  const needStoreExpansion = Boolean(postForText.send_tg || postForText.send_max);
-  if (!needStoreExpansion) {
+  // === Если TG не нужен — просто пробрасываем item дальше (для VK/SITE) ===
+  if (!postForText.send_tg) {
     out.push({
       json: {
         ...postForText,
@@ -386,7 +387,7 @@ for (const post of postsInput) {
     continue;
   }
 
-  // === Часть целей по stores (общая для TG и MAX) ===
+  // === TG часть (как было) ===
   const tzNeed = regionToStoreTz(postForText.region);
   if (tzNeed === null) {
     out.push({
@@ -397,12 +398,8 @@ for (const post of postsInput) {
         _now_utc: nowUtcIso,
         _run_key: runKey,
 
-        _tg_targets_empty: Boolean(postForText.send_tg),
-        _tg_targets_reason: postForText.send_tg ? `unknown region=${postForText.region}` : null,
-
-        _max_targets_empty: Boolean(postForText.send_max),
-        _max_targets_reason: postForText.send_max ? `unknown region=${postForText.region}` : null,
-
+        _tg_targets_empty: true,
+        _tg_targets_reason: `unknown region=${postForText.region}`,
         _stores_debug: storesDebug,
       },
     });
@@ -433,189 +430,142 @@ for (const post of postsInput) {
         _now_utc: nowUtcIso,
         _run_key: runKey,
 
-        _tg_targets_empty: Boolean(postForText.send_tg),
-        _tg_targets_reason: postForText.send_tg
-          ? (postForText.all_region
-              ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
-              : 'no store columns selected in sheet row (no store_* = 1)')
-          : null,
-
-        _max_targets_empty: Boolean(postForText.send_max),
-        _max_targets_reason: postForText.send_max
-          ? (postForText.all_region
-              ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
-              : 'no store columns selected in sheet row (no store_* = 1)')
-          : null,
-
+        _tg_targets_empty: true,
+        _tg_targets_reason: postForText.all_region
+          ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
+          : 'no store columns selected in sheet row (no store_* = 1)',
         _stores_debug: storesDebug,
       },
     });
     continue;
   }
 
-  // ---- общие данные медиа (для TG и MAX) ----
+  const tgBase = buildTgTextAndMode(postForText);
+  const debugMode = Number(postForText.tg_debug) === 1;
+
+  // ---- parse media ----
   const mediaRaw = (postForText.media_raw ?? postForText.media_url ?? postForText._raw?.media_raw ?? postForText._raw?.media_url ?? '').toString();
   const mediaArr = parseMediaLines(mediaRaw);
 
-  // === TG часть (как было), но только если send_tg ===
-  const tgBase = postForText.send_tg ? buildTgTextAndMode(postForText) : null;
-  const debugMode = postForText.send_tg ? (Number(postForText.tg_debug) === 1) : false;
-
   // old_post parsing (only if present)
-  const oldParsed = postForText.send_tg ? parseOldPost(postForText.old_post ?? postForText._raw?.old_post) : null;
+  const oldParsed = parseOldPost(postForText.old_post ?? postForText._raw?.old_post);
 
   // date part for old_link in region tz
   const nowUtcObj = nowUtcIso ? new Date(nowUtcIso) : new Date();
   const datePart = formatDDMMYYYYInTz(nowUtcObj, tzName);
 
-  // базовое решение по типу отправки (для TG)
+  // базовое решение по типу отправки (без учета caption длины — это сделаем per-store)
   let baseOp = 'message'; // message | photo | video | media_group
   let baseMedia = null;
 
-  if (postForText.send_tg) {
-    if (mediaArr.length === 0) {
-      baseOp = 'message';
-    } else if (mediaArr.length === 1) {
-      baseOp = mediaArr[0].type === 'photo' ? 'photo' : 'video';
-      baseMedia = mediaArr[0].media;
-    } else {
-      baseOp = 'media_group';
-    }
+  if (mediaArr.length === 0) {
+    baseOp = 'message';
+  } else if (mediaArr.length === 1) {
+    baseOp = mediaArr[0].type === 'photo' ? 'photo' : 'video';
+    baseMedia = mediaArr[0].media;
+  } else {
+    baseOp = 'media_group';
   }
 
-  const seenTgChat = new Set();
-  const seenMaxChat = new Set();
-  let producedTg = 0;
-  let producedMax = 0;
+  const seenChat = new Set();
+  let produced = 0;
 
   for (const storeId of targetStoreIds) {
     const s = storeMap.get(storeId);
     if (!s) continue;
     if (Number(s.time_zone) !== tzNeed) continue;
 
-    // ====== MAX item per store ======
-    if (postForText.send_max) {
-      const maxChatIdRaw = s.max_channel_id ?? s.max_chat_id ?? null;
-      const maxChatId = (maxChatIdRaw ?? '').toString().trim();
+    const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
+    const chatKey = String(chatId);
+    if (seenChat.has(chatKey)) continue;
+    seenChat.add(chatKey);
 
-      if (!maxChatId) {
-        out.push({
-          json: {
-            ...postForText,
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
+    // --- old link for this store (depends on storeId) ---
+    const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
+    const tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
 
-            store_id: storeId,
-            store_description: s.store_description ?? null,
+    // --- per-store media decision for albums: caption may be too long ---
+    let tgOp = baseOp;
+    let tgMedia = baseMedia;
+    let tgMediaGroup = null;
+    let needExtraTextMessage = false;
 
-            max_op: 'skip',
-            _max_skip: true,
-            _max_skip_reason: 'no max_channel_id for this store',
-            max_chat_id: null,
+    if (baseOp === 'media_group') {
+      tgMediaGroup = mediaArr;
 
-            max: {
-              chat_id: null,
-              text: (postForText.text ?? '').toString(),
-              media_raw: mediaRaw,
-            },
-
-            _stores_debug: storesDebug,
-          },
+      if (isCaptionOk(tgTextFinal)) {
+        tgMediaGroup = tgMediaGroup.map((m, idx) => {
+          if (idx === 0) {
+            return {
+              ...m,
+              caption: tgTextFinal,
+              parse_mode: tgBase.parse_mode,
+            };
+          }
+          return m;
         });
-      } else {
-        const maxKey = String(maxChatId);
-        if (!seenMaxChat.has(maxKey)) {
-          seenMaxChat.add(maxKey);
-
-          out.push({
-            json: {
-              ...postForText,
-              row_number: rowNumber,
-              _now: nowLocal,
-              _now_utc: nowUtcIso,
-              _run_key: runKey,
-
-              store_id: storeId,
-              store_description: s.store_description ?? null,
-
-              // routing for MAX
-              max_op: 'send',
-              max_chat_id: maxChatId,
-
-              max: {
-                chat_id: maxChatId,
-                text: (postForText.text ?? '').toString(),
-                media_raw: mediaRaw, // ВАЖНО: строка с "ф|" и "в|"
-              },
-
-              _run_key_channel: runKey ? `${runKey}|store:${storeId}|max` : null,
-              _stores_debug: storesDebug,
-            },
-          });
-
-          producedMax++;
-        }
+      } else if (tgTextFinal.trim()) {
+        // caption слишком длинный — альбом без caption, а текст отдельным сообщением
+        needExtraTextMessage = true;
       }
     }
 
-    // ====== TG items per store (как было) ======
-    if (postForText.send_tg) {
-      const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
-      const chatKey = String(chatId);
-      if (seenTgChat.has(chatKey)) continue;
-      seenTgChat.add(chatKey);
+    // 1) основной item
+    out.push({
+      json: {
+        ...postForText,
 
-      // --- old link for this store (depends on storeId) ---
-      const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
-      const tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
+        // служебные поля для апдейта Sheets
+        row_number: rowNumber,
+        _now: nowLocal,
+        _now_utc: nowUtcIso,
+        _run_key: runKey,
 
-      // --- per-store media decision for albums: caption may be too long ---
-      let tgOp = baseOp;
-      let tgMedia = baseMedia;
-      let tgMediaGroup = null;
-      let needExtraTextMessage = false;
+        // данные цели
+        store_id: storeId,
+        store_description: s.store_description ?? null,
 
-      if (baseOp === 'media_group') {
-        tgMediaGroup = mediaArr;
+        // routing for telegram
+        tg_op: tgOp,
+        tg_media: tgMedia,
+        tg_media_group: tgMediaGroup,
 
-        if (isCaptionOk(tgTextFinal)) {
-          tgMediaGroup = tgMediaGroup.map((m, idx) => {
-            if (idx === 0) {
-              return {
-                ...m,
-                caption: tgTextFinal,
-                parse_mode: tgBase.parse_mode,
-              };
-            }
-            return m;
-          });
-        } else if (tgTextFinal.trim()) {
-          // caption слишком длинный — альбом без caption, а текст отдельным сообщением
-          needExtraTextMessage = true;
-        }
-      }
+        // old link debug
+        _old_post_parsed: oldParsed,
+        _old_post_date_ddmmyyyy: datePart,
+        _old_post_link: oldLink,
 
-      // 1) основной item
+        tg: {
+          chat_id: chatId,
+          text: tgTextFinal,
+          parse_mode: tgBase.parse_mode,
+          debug: debugMode,
+        },
+
+        _run_key_channel: runKey ? `${runKey}|store:${storeId}` : null,
+        _stores_debug: storesDebug,
+      },
+    });
+
+    produced++;
+
+    // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
+    if (tgOp === 'media_group' && needExtraTextMessage) {
       out.push({
         json: {
           ...postForText,
 
-          // служебные поля для апдейта Sheets
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
           _run_key: runKey,
 
-          // данные цели
           store_id: storeId,
           store_description: s.store_description ?? null,
 
-          // routing for telegram
-          tg_op: tgOp,
-          tg_media: tgMedia,
-          tg_media_group: tgMediaGroup,
+          tg_op: 'message',
+          tg_media: null,
+          tg_media_group: null,
 
           // old link debug
           _old_post_parsed: oldParsed,
@@ -629,52 +579,14 @@ for (const post of postsInput) {
             debug: debugMode,
           },
 
-          _run_key_channel: runKey ? `${runKey}|store:${storeId}` : null,
+          _run_key_channel: runKey ? `${runKey}|store:${storeId}|text_after_album` : null,
           _stores_debug: storesDebug,
         },
       });
-
-      producedTg++;
-
-      // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
-      if (tgOp === 'media_group' && needExtraTextMessage) {
-        out.push({
-          json: {
-            ...postForText,
-
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            store_id: storeId,
-            store_description: s.store_description ?? null,
-
-            tg_op: 'message',
-            tg_media: null,
-            tg_media_group: null,
-
-            // old link debug
-            _old_post_parsed: oldParsed,
-            _old_post_date_ddmmyyyy: datePart,
-            _old_post_link: oldLink,
-
-            tg: {
-              chat_id: chatId,
-              text: tgTextFinal,
-              parse_mode: tgBase.parse_mode,
-              debug: debugMode,
-            },
-
-            _run_key_channel: runKey ? `${runKey}|store:${storeId}|text_after_album` : null,
-            _stores_debug: storesDebug,
-          },
-        });
-      }
     }
   }
 
-  if (postForText.send_tg && producedTg === 0) {
+  if (produced === 0) {
     out.push({
       json: {
         ...postForText,
@@ -685,22 +597,6 @@ for (const post of postsInput) {
 
         _tg_targets_empty: true,
         _tg_targets_reason: `stores selected but none matched mapping for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`,
-        _stores_debug: storesDebug,
-      },
-    });
-  }
-
-  if (postForText.send_max && producedMax === 0) {
-    out.push({
-      json: {
-        ...postForText,
-        row_number: rowNumber,
-        _now: nowLocal,
-        _now_utc: nowUtcIso,
-        _run_key: runKey,
-
-        _max_targets_empty: true,
-        _max_targets_reason: `stores selected but no MAX targets produced (check max_channel_id mapping)`,
         _stores_debug: storesDebug,
       },
     });

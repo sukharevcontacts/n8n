@@ -31,9 +31,6 @@ return items.map(item => {
       send_vk: bool1(d.send_vk),
       send_site: bool1(d.send_site),
 
-      // NEW: MAX channel flag
-      send_max: bool1(d.send_max),
-
       // debug flag for telegram routing (1 = send to test channel)
       tg_debug: num(d.tg_debug),
 
