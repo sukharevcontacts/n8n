@@ -788,23 +788,27 @@ for (const post of postsInput) {
           maxMediaGroup = mediaArrMax;
         }
 
-        // NEW: MAX text + invite footer
-        let maxTextFinal = (postForText.text ?? '').toString();
+        // NEW: MAX text + invite footer (MARKDOWN links)
+        let maxTextFinal = (postForText.text ?? '').toString().trim();
+
+        function mdLink(label, url) {
+          const u = String(url ?? '').trim();
+          if (!u) return null;
+          return `[${label}](${u})`;
+        }
 
         if (tgInvExptEmpty) {
           const lines = [];
 
-          if (tgInvite) {
-            lines.push(`📢 Подпишись в Telegram\n${tgInvite}`);
-          }
+          const tgLink = mdLink('📢 Подпишись в Telegram', tgInvite);
+          if (tgLink) lines.push(tgLink);
 
-          if (maxInvite) {
-            lines.push(`⚡ Подпишись в MAX\n${maxInvite}`);
-          }
+          const maxLink = mdLink('⚡ Подпишись в MAX', maxInvite);
+          if (maxLink) lines.push(maxLink);
 
           if (lines.length) {
             const footer = lines.join('\n\n');
-            maxTextFinal = maxTextFinal.trim()
+            maxTextFinal = maxTextFinal
               ? `${maxTextFinal}\n\n${footer}`
               : footer;
           }
