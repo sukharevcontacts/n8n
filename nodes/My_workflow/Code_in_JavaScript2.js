@@ -36,20 +36,12 @@ function escapeMarkdownV2(s) {
 }
 
 function buildTgTextAndMode(post) {
-  const pm = Number(post.parse_mode);
-
-  // If rich HTML from Google Sheets is provided, use it for Telegram (HTML mode),
-  // unless user explicitly chose MarkdownV2 (parse_mode=2).
-  if (post.text_html && pm !== 2) {
-    return { text: String(post.text_html), parse_mode: 'HTML' };
-  }
-
   let text = (post.text ?? '').toString();
   let parseMode = 'HTML';
 
-  if (pm === 1) {
+  if (Number(post.parse_mode) === 1) {
     parseMode = 'HTML';
-  } else if (pm === 2) {
+  } else if (Number(post.parse_mode) === 2) {
     parseMode = 'MarkdownV2';
   } else {
     text = escapeHtml(text);
@@ -131,80 +123,6 @@ function appendOldLinkToText(text, oldLink) {
   return `${base}\n\n${oldLink}`;
 }
 
-// --- Invite footer helpers ---
-function cleanUrl(v) {
-  const s = String(v ?? '').trim();
-  return s ? s : null;
-}
-
-function buildLinkLabel(label, url, parseMode) {
-  if (!url) return null;
-
-  if (parseMode === 'MarkdownV2') {
-    const t = escapeMarkdownV2(label);
-    const u = String(url).replace(/\)/g, '\\)').replace(/\(/g, '\\(');
-    return `[${t}](${u})`;
-  }
-
-  // HTML
-  return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
-}
-
-// UPDATED: labels without "на канал"
-function buildInviteFooter(parseMode, tgUrl, maxUrl) {
-  const lines = [];
-
-  const tgLine = buildLinkLabel('📢 Подпишись в Telegram', tgUrl, parseMode);
-  if (tgLine) lines.push(tgLine);
-
-  const maxLine = buildLinkLabel('⚡ Подпишись в MAX', maxUrl, parseMode);
-  if (maxLine) lines.push(maxLine);
-
-  return lines.length ? lines.join('\n') : null;
-}
-
-function appendFooter(text, footer) {
-  const base = (text ?? '').toString();
-  if (!footer) return base;
-  if (!base.trim()) return footer;
-  return `${base}\n\n${footer}`;
-}
-
-// --- Order links as TEXT block (for Telegram post_auth_type=1) ---
-function buildOrderLinksText(orderLinks, parseMode) {
-  if (!Array.isArray(orderLinks) || orderLinks.length === 0) return null;
-
-  const lines = [];
-  for (const b of orderLinks) {
-    const t = cleanLine(b?.text);
-    const u = cleanLine(b?.url);
-    if (!t || !u) continue;
-
-    let link = buildLinkLabel(t, u, parseMode);
-    if (!link) continue;
-
-    // Make order_links bold in Telegram
-    if (parseMode === 'MarkdownV2') {
-      link = `**${link}**`;
-    } else {
-      // HTML
-      link = `<b>${link}</b>`;
-    }
-
-    lines.push(`• ${link}`);
-  }
-
-  return lines.length ? lines.join('\n') : null;
-}
-
-function appendOrderLinksToText(text, orderLinks, parseMode) {
-  const base = (text ?? '').toString();
-  const block = buildOrderLinksText(orderLinks, parseMode);
-  if (!block) return base;
-  if (!base.trim()) return block;
-  return `${base}\n\n${block}`;
-}
-
 // Ваш формат: store_195_Большевистская
 function pickStoreIdsFromRaw(raw) {
   const ids = [];
@@ -226,30 +144,6 @@ function cleanLine(s) {
   return String(s ?? '')
     .replace(/[\uFEFF\u200B\u200C\u200D\u2060\u00AD]/g, '')
     .trim();
-}
-
-function parseOrderLinks(orderLinkRaw) {
-  const raw = (orderLinkRaw ?? '').toString();
-  const lines = raw.split(/\r\n|\n|\r/g).map(cleanLine).filter(Boolean);
-
-  const out = [];
-  for (const line of lines) {
-    // Format: Button text|https://...
-    const parts = line.split('|');
-    if (parts.length < 2) continue;
-
-    const text = cleanLine(parts[0]);
-    const url = cleanLine(parts.slice(1).join('|')); // keep '|' inside URL if any
-
-    if (!text || !url) continue;
-
-    // minimal url sanity check
-    if (!/^https?:\/\//i.test(url)) continue;
-
-    out.push({ text, url });
-  }
-
-  return out.length ? out : null;
 }
 
 /**
@@ -390,8 +284,6 @@ if (storesInput.length === 0) {
   return postsInput.map(post => ({
     json: {
       ...post,
-      // NEW
-      order_links: parseOrderLinks(post.order_link ?? post._raw?.order_link),
       _tg_targets_empty: true,
       _tg_targets_reason: `stores input is empty: $items("${POSTGRES_NODE_NAME}") returned 0 rows`,
       _stores_debug: storesDebug,
@@ -416,7 +308,10 @@ for (const s of storesInput) {
 const out = [];
 
 for (const post of postsInput) {
-  const hasAnyChannel = Boolean(post.send_tg || post.send_max || post.send_vk || post.send_site);
+  // Раньше тут было: if (!post.send_tg) continue;
+  // Теперь: пропускаем VK/SITE посты дальше одним item, а TG-развёртку делаем только когда send_tg=true
+
+  const hasAnyChannel = Boolean(post.send_tg || post.send_vk || post.send_site);
   if (!hasAnyChannel) continue;
 
   // --- протаскиваем row_number (для Update в Sheets) ---
@@ -439,8 +334,6 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...post,
-          // NEW
-          order_links: parseOrderLinks(post.order_link ?? post._raw?.order_link),
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -458,8 +351,6 @@ for (const post of postsInput) {
       out.push({
         json: {
           ...post,
-          // NEW
-          order_links: parseOrderLinks(post.order_link ?? post._raw?.order_link),
           row_number: rowNumber,
           _now: nowLocal,
           _now_utc: nowUtcIso,
@@ -481,21 +372,11 @@ for (const post of postsInput) {
   }
   // --- /GOODMORNING ---
 
-  const needTg = Boolean(postForText.send_tg);
-  const needMax = Boolean(postForText.send_max);
-
-  // NEW: parse order links (multi-line: Text|URL)
-  const order_links = parseOrderLinks(postForText.order_link ?? postForText._raw?.order_link);
-
-  // === Если TG/MAX не нужны — просто пробрасываем item дальше (для VK/SITE) ===
-  if (!needTg && !needMax) {
+  // === Если TG не нужен — просто пробрасываем item дальше (для VK/SITE) ===
+  if (!postForText.send_tg) {
     out.push({
       json: {
         ...postForText,
-
-        // NEW
-        order_links,
-
         row_number: rowNumber,
         _now: nowLocal,
         _now_utc: nowUtcIso,
@@ -506,26 +387,22 @@ for (const post of postsInput) {
     continue;
   }
 
+  // === TG часть (как было) ===
   const tzNeed = regionToStoreTz(postForText.region);
   if (tzNeed === null) {
-    // неизвестный регион — не можем подобрать точки
-    if (needTg) {
-      out.push({
-        json: {
-          ...postForText,
-          // NEW
-          order_links,
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
+    out.push({
+      json: {
+        ...postForText,
+        row_number: rowNumber,
+        _now: nowLocal,
+        _now_utc: nowUtcIso,
+        _run_key: runKey,
 
-          _tg_targets_empty: true,
-          _tg_targets_reason: `unknown region=${postForText.region}`,
-          _stores_debug: storesDebug,
-        },
-      });
-    }
+        _tg_targets_empty: true,
+        _tg_targets_reason: `unknown region=${postForText.region}`,
+        _stores_debug: storesDebug,
+      },
+    });
     continue;
   }
 
@@ -545,325 +422,174 @@ for (const post of postsInput) {
   targetStoreIds = Array.from(new Set(targetStoreIds));
 
   if (targetStoreIds.length === 0) {
-    if (needTg) {
-      out.push({
-        json: {
-          ...postForText,
-          // NEW
-          order_links,
-          row_number: rowNumber,
-          _now: nowLocal,
-          _now_utc: nowUtcIso,
-          _run_key: runKey,
+    out.push({
+      json: {
+        ...postForText,
+        row_number: rowNumber,
+        _now: nowLocal,
+        _now_utc: nowUtcIso,
+        _run_key: runKey,
 
-          _tg_targets_empty: true,
-          _tg_targets_reason: postForText.all_region
-            ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
-            : 'no store columns selected in sheet row (no store_* = 1)',
-          _stores_debug: storesDebug,
-        },
-      });
-    }
+        _tg_targets_empty: true,
+        _tg_targets_reason: postForText.all_region
+          ? `no stores found for time_zone=${tzNeed} (stores_count=${storesInput.length}, tzs=${storesDebug.stores_time_zones.join(',')})`
+          : 'no store columns selected in sheet row (no store_* = 1)',
+        _stores_debug: storesDebug,
+      },
+    });
     continue;
   }
+
+  const tgBase = buildTgTextAndMode(postForText);
+  const debugMode = Number(postForText.tg_debug) === 1;
 
   // ---- parse media ----
   const mediaRaw = (postForText.media_raw ?? postForText.media_url ?? postForText._raw?.media_raw ?? postForText._raw?.media_url ?? '').toString();
   const mediaArr = parseMediaLines(mediaRaw);
 
-  // old_post parsing (only if present) — используется только для TG deep-link
+  // old_post parsing (only if present)
   const oldParsed = parseOldPost(postForText.old_post ?? postForText._raw?.old_post);
 
   // date part for old_link in region tz
   const nowUtcObj = nowUtcIso ? new Date(nowUtcIso) : new Date();
   const datePart = formatDDMMYYYYInTz(nowUtcObj, tzName);
 
-  // --- TG prep (как было) ---
-  const tgBase = needTg ? buildTgTextAndMode(postForText) : null;
-  const debugMode = needTg ? (Number(postForText.tg_debug) === 1) : false;
-
-  // базовое решение по типу отправки (TG)
-  let baseOpTg = 'message'; // message | photo | video | media_group
-  let baseMediaTg = null;
+  // базовое решение по типу отправки (без учета caption длины — это сделаем per-store)
+  let baseOp = 'message'; // message | photo | video | media_group
+  let baseMedia = null;
 
   if (mediaArr.length === 0) {
-    baseOpTg = 'message';
+    baseOp = 'message';
   } else if (mediaArr.length === 1) {
-    baseOpTg = mediaArr[0].type === 'photo' ? 'photo' : 'video';
-    baseMediaTg = mediaArr[0].media;
+    baseOp = mediaArr[0].type === 'photo' ? 'photo' : 'video';
+    baseMedia = mediaArr[0].media;
   } else {
-    baseOpTg = 'media_group';
+    baseOp = 'media_group';
   }
 
-  // --- MAX prep ---
-  // MAX API: photo -> image (type=image)
-  const mediaArrMax = mediaArr.map(m => ({
-    type: m.type === 'photo' ? 'image' : 'video',
-    media: m.media,
-  }));
-
-  let baseOpMax = 'message'; // message | image | video | media_group
-  let baseMediaMax = null;
-
-  if (mediaArrMax.length === 0) {
-    baseOpMax = 'message';
-  } else if (mediaArrMax.length === 1) {
-    baseOpMax = mediaArrMax[0].type === 'image' ? 'image' : 'video';
-    baseMediaMax = mediaArrMax[0].media;
-  } else {
-    baseOpMax = 'media_group';
-  }
-
-  const seenChat = new Set(); // TG dedupe by chat_id
-  const seenMax = new Set();  // MAX dedupe by max_channel_id
-
-  let producedTg = 0;
-  let producedMax = 0;
+  const seenChat = new Set();
+  let produced = 0;
 
   for (const storeId of targetStoreIds) {
     const s = storeMap.get(storeId);
     if (!s) continue;
     if (Number(s.time_zone) !== tzNeed) continue;
 
-    const tgInvExptEmpty = !String(postForText.tg_inv_expt ?? '').trim();
-    const tgInvite = tgInvExptEmpty ? cleanUrl(s.tg_invite_url_channel_friend) : null;
-    const maxInvite = tgInvExptEmpty ? cleanUrl(s.max_invite_url_channel_friend) : null;
+    const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
+    const chatKey = String(chatId);
+    if (seenChat.has(chatKey)) continue;
+    seenChat.add(chatKey);
 
-    // ---------------- TG ----------------
-    if (needTg) {
-      const chatId = debugMode ? TG_TEST_CHAT_ID : s.channel_chat_id;
-      const chatKey = String(chatId);
-      if (!chatId) {
-        // если нет chat_id — пропускаем
-      } else if (!seenChat.has(chatKey)) {
-        seenChat.add(chatKey);
+    // --- old link for this store (depends on storeId) ---
+    const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
+    const tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
 
-        const authType1 = Number((postForText.post_auth_type ?? s.post_auth_type)) === 1;
+    // --- per-store media decision for albums: caption may be too long ---
+    let tgOp = baseOp;
+    let tgMedia = baseMedia;
+    let tgMediaGroup = null;
+    let needExtraTextMessage = false;
 
-        // --- old link for this store (depends on storeId) ---
-        // IMPORTANT: if post_auth_type = 1 -> ignore old_post completely
-        const oldLink = (!authType1 && oldParsed)
-          ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode)
-          : null;
+    if (baseOp === 'media_group') {
+      tgMediaGroup = mediaArr;
 
-        // --- text final (Telegram) ---
-        // post_auth_type = 1:
-        //   - base text
-        //   - then order_links block (from order_link)
-        //   - then invite footer (if enabled)
-        // else:
-        //   - current behavior (oldLink + footer)
-        let tgTextFinal = tgBase.text;
-
-        if (authType1) {
-          tgTextFinal = appendOrderLinksToText(tgTextFinal, order_links, tgBase.parse_mode);
-        } else {
-          tgTextFinal = appendOldLinkToText(tgTextFinal, oldLink);
-        }
-
-        if (tgInvExptEmpty) {
-          const footer = buildInviteFooter(tgBase.parse_mode, tgInvite, maxInvite);
-          tgTextFinal = appendFooter(tgTextFinal, footer);
-        }
-
-        // --- per-store media decision for albums: caption may be too long ---
-        let tgOp = baseOpTg;
-        let tgMedia = baseMediaTg;
-        let tgMediaGroup = null;
-        let needExtraTextMessage = false;
-
-        if (baseOpTg === 'media_group') {
-          tgMediaGroup = mediaArr;
-
-          if (isCaptionOk(tgTextFinal)) {
-            tgMediaGroup = tgMediaGroup.map((m, idx) => {
-              if (idx === 0) {
-                return {
-                  ...m,
-                  caption: tgTextFinal,
-                  parse_mode: tgBase.parse_mode,
-                };
-              }
-              return m;
-            });
-          } else if (tgTextFinal.trim()) {
-            // caption слишком длинный — альбом без caption, а текст отдельным сообщением
-            needExtraTextMessage = true;
-          }
-        }
-
-        // 1) основной item
-        out.push({
-          json: {
-            ...postForText,
-
-            // NEW
-            order_links,
-
-            channel: 'tg',
-
-            // служебные поля для апдейта Sheets
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            // данные цели
-            store_id: storeId,
-            store_description: s.store_description ?? null,
-
-            // routing for telegram
-            tg_op: tgOp,
-            tg_media: tgMedia,
-            tg_media_group: tgMediaGroup,
-
-            // old link debug
-            _old_post_parsed: oldParsed,
-            _old_post_date_ddmmyyyy: datePart,
-            _old_post_link: oldLink,
-
-            tg: {
-              chat_id: chatId,
-              text: tgTextFinal,
+      if (isCaptionOk(tgTextFinal)) {
+        tgMediaGroup = tgMediaGroup.map((m, idx) => {
+          if (idx === 0) {
+            return {
+              ...m,
+              caption: tgTextFinal,
               parse_mode: tgBase.parse_mode,
-              debug: debugMode,
-            },
-
-            _run_key_channel: runKey ? `${runKey}|tg|store:${storeId}` : null,
-            _stores_debug: storesDebug,
-          },
-        });
-
-        producedTg++;
-
-        // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
-        if (tgOp === 'media_group' && needExtraTextMessage) {
-          out.push({
-            json: {
-              ...postForText,
-
-              // NEW
-              order_links,
-
-              channel: 'tg',
-
-              row_number: rowNumber,
-              _now: nowLocal,
-              _now_utc: nowUtcIso,
-              _run_key: runKey,
-
-              store_id: storeId,
-              store_description: s.store_description ?? null,
-
-              tg_op: 'message',
-              tg_media: null,
-              tg_media_group: null,
-
-              // old link debug
-              _old_post_parsed: oldParsed,
-              _old_post_date_ddmmyyyy: datePart,
-              _old_post_link: oldLink,
-
-              tg: {
-                chat_id: chatId,
-                text: tgTextFinal,
-                parse_mode: tgBase.parse_mode,
-                debug: debugMode,
-              },
-
-              _run_key_channel: runKey ? `${runKey}|tg|store:${storeId}|text_after_album` : null,
-              _stores_debug: storesDebug,
-            },
-          });
-        }
-      }
-    }
-
-    // ---------------- MAX ----------------
-    if (needMax) {
-      const maxChannelId = s.max_channel_id;
-      const maxKey = String(maxChannelId ?? '');
-      if (!maxChannelId) {
-        // нет канала MAX у точки — пропускаем
-      } else if (!seenMax.has(maxKey)) {
-        seenMax.add(maxKey);
-
-        let maxOp = baseOpMax;
-        let maxMedia = baseMediaMax;
-        let maxMediaGroup = null;
-
-        if (baseOpMax === 'media_group') {
-          maxMediaGroup = mediaArrMax;
-        }
-
-        // NEW: MAX text + invite footer (MARKDOWN links)
-        let maxTextFinal = (postForText.text ?? '').toString().trim();
-
-        function mdLink(label, url) {
-          const u = String(url ?? '').trim();
-          if (!u) return null;
-          return `[${label}](${u})`;
-        }
-
-        if (tgInvExptEmpty) {
-          const lines = [];
-
-          const tgLink = mdLink('📢 Подпишись в Telegram', tgInvite);
-          if (tgLink) lines.push(tgLink);
-
-          const maxLink = mdLink('⚡ Подпишись в MAX', maxInvite);
-          if (maxLink) lines.push(maxLink);
-
-          if (lines.length) {
-            const footer = lines.join('\n\n');
-            maxTextFinal = maxTextFinal
-              ? `${maxTextFinal}\n\n${footer}`
-              : footer;
+            };
           }
-        }
-
-        out.push({
-          json: {
-            ...postForText,
-
-            // NEW
-            order_links,
-
-            channel: 'max',
-
-            row_number: rowNumber,
-            _now: nowLocal,
-            _now_utc: nowUtcIso,
-            _run_key: runKey,
-
-            store_id: storeId,
-            store_description: s.store_description ?? null,
-
-            max_op: maxOp,
-            max_media: maxMedia,
-            max_media_group: maxMediaGroup,
-
-            max: {
-              channel_id: maxChannelId,
-              text: maxTextFinal,
-            },
-
-            _run_key_channel: runKey ? `${runKey}|max|store:${storeId}` : null,
-            _stores_debug: storesDebug,
-          },
+          return m;
         });
-
-        producedMax++;
+      } else if (tgTextFinal.trim()) {
+        // caption слишком длинный — альбом без caption, а текст отдельным сообщением
+        needExtraTextMessage = true;
       }
     }
-  }
 
-  if (needTg && producedTg === 0) {
+    // 1) основной item
     out.push({
       json: {
         ...postForText,
-        // NEW
-        order_links,
+
+        // служебные поля для апдейта Sheets
+        row_number: rowNumber,
+        _now: nowLocal,
+        _now_utc: nowUtcIso,
+        _run_key: runKey,
+
+        // данные цели
+        store_id: storeId,
+        store_description: s.store_description ?? null,
+
+        // routing for telegram
+        tg_op: tgOp,
+        tg_media: tgMedia,
+        tg_media_group: tgMediaGroup,
+
+        // old link debug
+        _old_post_parsed: oldParsed,
+        _old_post_date_ddmmyyyy: datePart,
+        _old_post_link: oldLink,
+
+        tg: {
+          chat_id: chatId,
+          text: tgTextFinal,
+          parse_mode: tgBase.parse_mode,
+          debug: debugMode,
+        },
+
+        _run_key_channel: runKey ? `${runKey}|store:${storeId}` : null,
+        _stores_debug: storesDebug,
+      },
+    });
+
+    produced++;
+
+    // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
+    if (tgOp === 'media_group' && needExtraTextMessage) {
+      out.push({
+        json: {
+          ...postForText,
+
+          row_number: rowNumber,
+          _now: nowLocal,
+          _now_utc: nowUtcIso,
+          _run_key: runKey,
+
+          store_id: storeId,
+          store_description: s.store_description ?? null,
+
+          tg_op: 'message',
+          tg_media: null,
+          tg_media_group: null,
+
+          // old link debug
+          _old_post_parsed: oldParsed,
+          _old_post_date_ddmmyyyy: datePart,
+          _old_post_link: oldLink,
+
+          tg: {
+            chat_id: chatId,
+            text: tgTextFinal,
+            parse_mode: tgBase.parse_mode,
+            debug: debugMode,
+          },
+
+          _run_key_channel: runKey ? `${runKey}|store:${storeId}|text_after_album` : null,
+          _stores_debug: storesDebug,
+        },
+      });
+    }
+  }
+
+  if (produced === 0) {
+    out.push({
+      json: {
+        ...postForText,
         row_number: rowNumber,
         _now: nowLocal,
         _now_utc: nowUtcIso,
