@@ -36,12 +36,20 @@ function escapeMarkdownV2(s) {
 }
 
 function buildTgTextAndMode(post) {
+  const pm = Number(post.parse_mode);
+
+  // If rich HTML from Google Sheets is provided, use it for Telegram (HTML mode),
+  // unless user explicitly chose MarkdownV2 (parse_mode=2).
+  if (post.text_html && pm !== 2) {
+    return { text: String(post.text_html), parse_mode: 'HTML' };
+  }
+
   let text = (post.text ?? '').toString();
   let parseMode = 'HTML';
 
-  if (Number(post.parse_mode) === 1) {
+  if (pm === 1) {
     parseMode = 'HTML';
-  } else if (Number(post.parse_mode) === 2) {
+  } else if (pm === 2) {
     parseMode = 'MarkdownV2';
   } else {
     text = escapeHtml(text);
