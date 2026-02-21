@@ -1,6 +1,6 @@
 // === НАСТРОЙКИ ===
 const TG_TEST_CHAT_ID = '-1003640743827';
-const TG_TEST_FORCE_AUTH_TYPE_1 = true; // true => order_link, false => old_post
+const TG_TEST_FORCE_AUTH_TYPE_1 = false; // true => order_link, false => old_post
 
 // !!! Поставьте реальные имена узлов:
 const FILTER_NODE_NAME = 'Filter1';
@@ -725,6 +725,7 @@ for (const post of postsInput) {
 
             // NEW
             order_links,
+            post_auth_type: effectiveAuthType,
 
             channel: 'tg',
 
@@ -826,6 +827,7 @@ for (const post of postsInput) {
 
             // NEW
             order_links,
+            post_auth_type: Number(postForText.post_auth_type ?? s.post_auth_type ?? null),
 
             channel: 'max',
 
