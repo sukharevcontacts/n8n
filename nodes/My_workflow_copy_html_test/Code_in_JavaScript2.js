@@ -706,21 +706,12 @@ for (const post of postsInput) {
         let needExtraTextMessage = false;
 
         if (baseOpTg === 'media_group') {
+          // IMPORTANT:
+          //  - Do NOT set caption inside sendMediaGroup items (inline buttons don't work under media groups).
+          //  - Album media must be sent first; text is sent later as a separate message by downstream nodes.
           tgMediaGroup = mediaArr;
 
-          if (isCaptionOk(tgTextFinal)) {
-            tgMediaGroup = tgMediaGroup.map((m, idx) => {
-              if (idx === 0) {
-                return {
-                  ...m,
-                  caption: tgTextFinal,
-                  parse_mode: tgBase.parse_mode,
-                };
-              }
-              return m;
-            });
-          } else if (tgTextFinal.trim()) {
-            // caption слишком длинный — альбом без caption, а текст отдельным сообщением
+          if (tgTextFinal && tgTextFinal.trim()) {
             needExtraTextMessage = true;
           }
         }
@@ -750,6 +741,12 @@ for (const post of postsInput) {
             tg_media: tgMedia,
             tg_media_group: tgMediaGroup,
 
+
+            // helpers for sequential album -> text sending (used by HTTP Request -> If1 -> Send a text message1)
+            tg_send_text_after_album: (tgOp === 'media_group' && needExtraTextMessage && tgTextFinal && tgTextFinal.trim()) ? true : false,
+            tg_chat_id: chatId,
+            tg_text: tgTextFinal,
+            tg_parse_mode: tgBase.parse_mode,
             // old link debug
             _old_post_parsed: oldParsed,
             _old_post_date_ddmmyyyy: datePart,
@@ -771,43 +768,9 @@ for (const post of postsInput) {
 
         // 2) если альбом и текст длинный — отдельное сообщение текстом после альбома
         if (tgOp === 'media_group' && needExtraTextMessage) {
-          out.push({
-            json: {
-              ...postForText,
-
-              // NEW
-              order_links,
-
-              channel: 'tg',
-
-              row_number: rowNumber,
-              _now: nowLocal,
-              _now_utc: nowUtcIso,
-              _run_key: runKey,
-
-              store_id: storeId,
-              store_description: s.store_description ?? null,
-
-              tg_op: 'message',
-              tg_media: null,
-              tg_media_group: null,
-
-              // old link debug
-              _old_post_parsed: oldParsed,
-              _old_post_date_ddmmyyyy: datePart,
-              _old_post_link: oldLink,
-
-              tg: {
-                chat_id: chatId,
-                text: tgTextFinal,
-                parse_mode: tgBase.parse_mode,
-                debug: debugMode,
-              },
-
-              _run_key_channel: runKey ? `${runKey}|tg|store:${storeId}|text_after_album` : null,
-              _stores_debug: storesDebug,
-            },
-          });
+          // We intentionally do NOT create a second item here.
+          // Otherwise it would go through the 'Send a text message' branch and might arrive BEFORE the album.
+          // Text for the album is sent after sendMediaGroup by downstream nodes: HTTP Request -> If1 -> Send a text message1.
         }
       }
     }
