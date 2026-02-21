@@ -1,5 +1,6 @@
 // === НАСТРОЙКИ ===
 const TG_TEST_CHAT_ID = '-1003640743827';
+const TG_TEST_FORCE_AUTH_TYPE_1 = true; // true => order_link, false => old_post
 
 // !!! Поставьте реальные имена узлов:
 const FILTER_NODE_NAME = 'Filter1';
@@ -34,21 +35,56 @@ function escapeMarkdownV2(s) {
   // Telegram MarkdownV2 special chars: _ * [ ] ( ) ~ ` > # + - = | { } . !
   return String(s ?? '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
+// Telegram HTML supports a limited subset and DOES NOT support <br>. Convert it to newlines.
+function normalizeTelegramHtml(html) {
+  if (html === null || html === undefined) return '';
+
+  let s = String(html);
+
+  // <br> / <br/> / <br /> -> newline
+  s = s.replace(/<br\s*\/?>/gi, '\n');
+
+  // Convert common block tags to newlines (open tags removed, close tags -> newline)
+  s = s.replace(/<\/(p|div|h\d|blockquote)>/gi, '\n');
+  s = s.replace(/<(p|div|h\d|blockquote)(\s[^>]*)?>/gi, '');
+
+  // Optionally strip spans (sometimes produced by HTML converters)
+  s = s.replace(/<\/?span(\s[^>]*)?>/gi, '');
+
+  // Minimal entity cleanup
+  s = s.replace(/&nbsp;/gi, ' ');
+
+  // Cleanup excessive newlines
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  s = s.replace(/\n{3,}/g, '\n\n').trim();
+
+  return s;
+}
+
 
 function buildTgTextAndMode(post) {
-  let text = (post.text ?? '').toString();
-  let parseMode = 'HTML';
+  const pm = Number(post.parse_mode);
 
-  if (Number(post.parse_mode) === 1) {
-    parseMode = 'HTML';
-  } else if (Number(post.parse_mode) === 2) {
-    parseMode = 'MarkdownV2';
-  } else {
-    text = escapeHtml(text);
-    parseMode = 'HTML';
+  // Plain text from sheet (fallback)
+  const textPlain = (post.text ?? '').toString();
+
+  // Formatted HTML from sheet (after Merge text_html into rows)
+  const textHtml = (post.text_html ?? '').toString();
+
+  if (pm === 2) {
+    // MarkdownV2: use plain text
+    return { text: textPlain, parse_mode: 'MarkdownV2' };
   }
 
-  return { text, parse_mode: parseMode };
+  if (pm === 1) {
+    // HTML: prefer formatted text_html if present, but normalize for Telegram (no <br>, limited tags)
+    const tRaw = (textHtml && textHtml.trim()) ? textHtml : textPlain;
+    const t = normalizeTelegramHtml(tRaw);
+    return { text: t, parse_mode: 'HTML' };
+  }
+
+  // Fallback: safe HTML (escape)
+  return { text: escapeHtml(textPlain), parse_mode: 'HTML' };
 }
 
 // old_post format: "197_КУПИТЬ"
@@ -160,6 +196,41 @@ function appendFooter(text, footer) {
   if (!footer) return base;
   if (!base.trim()) return footer;
   return `${base}\n\n${footer}`;
+}
+
+// --- Order links as TEXT block (for Telegram post_auth_type=1) ---
+function buildOrderLinksText(orderLinks, parseMode) {
+  if (!Array.isArray(orderLinks) || orderLinks.length === 0) return null;
+
+  const lines = [];
+  for (const b of orderLinks) {
+    const t = cleanLine(b?.text);
+    const u = cleanLine(b?.url);
+    if (!t || !u) continue;
+
+    let link = buildLinkLabel(t, u, parseMode);
+    if (!link) continue;
+
+    // Make order_links bold in Telegram
+    if (parseMode === 'MarkdownV2') {
+      link = `**${link}**`;
+    } else {
+      // HTML
+      link = `<b>${link}</b>`;
+    }
+
+    lines.push(`• ${link}`);
+  }
+
+  return lines.length ? lines.join('\n') : null;
+}
+
+function appendOrderLinksToText(text, orderLinks, parseMode) {
+  const base = (text ?? '').toString();
+  const block = buildOrderLinksText(orderLinks, parseMode);
+  if (!block) return base;
+  if (!base.trim()) return block;
+  return `${base}\n\n${block}`;
 }
 
 // Ваш формат: store_195_Большевистская
@@ -595,11 +666,33 @@ for (const post of postsInput) {
       } else if (!seenChat.has(chatKey)) {
         seenChat.add(chatKey);
 
-        // --- old link for this store (depends on storeId) ---
-        const oldLink = oldParsed ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode) : null;
+        const effectiveAuthType =
+          (debugMode && TG_TEST_FORCE_AUTH_TYPE_1)
+            ? 1
+            : Number(postForText.post_auth_type ?? s.post_auth_type);
 
-        // --- text final: old link + invite footer ---
-        let tgTextFinal = appendOldLinkToText(tgBase.text, oldLink);
+        const authType1 = effectiveAuthType === 1;
+
+        // --- old link for this store (depends on storeId) ---
+        // IMPORTANT: if post_auth_type = 1 -> ignore old_post completely
+        const oldLink = (!authType1 && oldParsed)
+          ? buildOldLink(oldParsed, storeId, datePart, tgBase.parse_mode)
+          : null;
+
+        // --- text final (Telegram) ---
+        // post_auth_type = 1:
+        //   - base text
+        //   - then order_links block (from order_link)
+        //   - then invite footer (if enabled)
+        // else:
+        //   - current behavior (oldLink + footer)
+        let tgTextFinal = tgBase.text;
+
+        if (authType1) {
+          tgTextFinal = appendOrderLinksToText(tgTextFinal, order_links, tgBase.parse_mode);
+        } else {
+          tgTextFinal = appendOldLinkToText(tgTextFinal, oldLink);
+        }
 
         if (tgInvExptEmpty) {
           const footer = buildInviteFooter(tgBase.parse_mode, tgInvite, maxInvite);
@@ -736,23 +829,27 @@ for (const post of postsInput) {
           maxMediaGroup = mediaArrMax;
         }
 
-        // NEW: MAX text + invite footer
-        let maxTextFinal = (postForText.text ?? '').toString();
+        // NEW: MAX text + invite footer (MARKDOWN links)
+        let maxTextFinal = (postForText.text ?? '').toString().trim();
+
+        function mdLink(label, url) {
+          const u = String(url ?? '').trim();
+          if (!u) return null;
+          return `[${label}](${u})`;
+        }
 
         if (tgInvExptEmpty) {
           const lines = [];
 
-          if (tgInvite) {
-            lines.push(`📢 Подпишись в Telegram\n${tgInvite}`);
-          }
+          const tgLink = mdLink('📢 Подпишись в Telegram', tgInvite);
+          if (tgLink) lines.push(tgLink);
 
-          if (maxInvite) {
-            lines.push(`⚡ Подпишись в MAX\n${maxInvite}`);
-          }
+          const maxLink = mdLink('⚡ Подпишись в MAX', maxInvite);
+          if (maxLink) lines.push(maxLink);
 
           if (lines.length) {
             const footer = lines.join('\n\n');
-            maxTextFinal = maxTextFinal.trim()
+            maxTextFinal = maxTextFinal
               ? `${maxTextFinal}\n\n${footer}`
               : footer;
           }

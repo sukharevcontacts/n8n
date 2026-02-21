@@ -36,7 +36,14 @@ return items.map(item => {
       tg_debug: num(d.tg_debug),
 
       title: titleStr,
+
+      // plain text (fallback)
       text: d.text ?? '',
+
+      // ✅ formatted HTML from Google Sheets (after merge)
+      text_html: strOrNull(d.text_html),
+
+      // 1 = HTML, 2 = MarkdownV2, else = fallback safe HTML later
       parse_mode: num(d.parse_mode) ?? 0,
 
       media_raw: d.media_url ?? '',
