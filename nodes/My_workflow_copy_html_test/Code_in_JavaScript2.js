@@ -1,6 +1,6 @@
 // === НАСТРОЙКИ ===
 const TG_TEST_CHAT_ID = '-1003640743827';
-const TG_TEST_FORCE_AUTH_TYPE_1 = false; // true => order_link, false => old_post
+const TG_TEST_FORCE_AUTH_TYPE_1 = true; // true => order_link, false => old_post
 
 // !!! Поставьте реальные имена узлов:
 const FILTER_NODE_NAME = 'Filter1';
@@ -666,10 +666,17 @@ for (const post of postsInput) {
       } else if (!seenChat.has(chatKey)) {
         seenChat.add(chatKey);
 
-        const effectiveAuthType =
-          (debugMode && TG_TEST_FORCE_AUTH_TYPE_1)
-            ? 1
-            : Number(postForText.post_auth_type ?? s.post_auth_type);
+        let effectiveAuthType;
+
+        if (debugMode) {
+          // In debug mode we fully override post_auth_type based on TG_TEST_FORCE_AUTH_TYPE_1
+          // true  => 1 (use order_link / inline buttons)
+          // false => 0 (use old_post)
+          effectiveAuthType = TG_TEST_FORCE_AUTH_TYPE_1 ? 1 : 0;
+        } else {
+          // In normal mode we use the value from the post row (if set) or fallback to the store row
+          effectiveAuthType = Number(postForText.post_auth_type ?? s.post_auth_type);
+        }
 
         const authType1 = effectiveAuthType === 1;
 
