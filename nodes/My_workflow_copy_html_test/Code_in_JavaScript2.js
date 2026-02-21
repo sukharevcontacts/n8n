@@ -1,6 +1,6 @@
 // === НАСТРОЙКИ ===
 const TG_TEST_CHAT_ID = '-1003640743827';
-const TG_TEST_FORCE_AUTH_TYPE_1 = false; // true => order_link, false => old_post
+const TG_TEST_FORCE_AUTH_TYPE_1 = true; // true => order_link, false => old_post
 
 // !!! Поставьте реальные имена узлов:
 const FILTER_NODE_NAME = 'Filter1';
@@ -689,10 +689,12 @@ for (const post of postsInput) {
         let tgTextFinal = tgBase.text;
 
         if (authType1) {
-          tgTextFinal = appendOrderLinksToText(tgTextFinal, order_links, tgBase.parse_mode);
-        } else {
-          tgTextFinal = appendOldLinkToText(tgTextFinal, oldLink);
-        }
+  // post_auth_type = 1: DO NOT add order links into the text.
+  // Links will be rendered as inline buttons (reply_markup) downstream.
+} else {
+  // post_auth_type != 1 (e.g. 0): add legacy link into the text.
+  tgTextFinal = appendOldLinkToText(tgTextFinal, oldLink);
+}
 
         if (tgInvExptEmpty) {
           const footer = buildInviteFooter(tgBase.parse_mode, tgInvite, maxInvite);

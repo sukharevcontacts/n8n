@@ -1,14 +1,13 @@
-// ===== ВАРИАНТ B =====
-// если используется old_post_link (старый пост) — кнопки НЕ делаем
-if ($json.old_post_link) {
+// ❗ Кнопки только для post_auth_type = 1
+if (Number($json.post_auth_type) !== 1) {
   $json.tg_reply_markup = null;
   return $json;
 }
 
-// --- берём order_links (может прийти строкой) ---
+// --- дальше строим кнопки ---
 let links = $json.order_links;
 
-// если строка — парсим JSON
+// если пришла строка — парсим
 if (typeof links === 'string') {
   try {
     links = JSON.parse(links);
@@ -17,12 +16,11 @@ if (typeof links === 'string') {
   }
 }
 
-// защита
 if (!Array.isArray(links)) {
   links = [];
 }
 
-// --- собираем inline keyboard (по 1 кнопке в строке) ---
+// строим inline_keyboard
 const rows = links
   .filter(b => b && b.text && b.url)
   .map(b => ([{ text: String(b.text), url: String(b.url) }]));
