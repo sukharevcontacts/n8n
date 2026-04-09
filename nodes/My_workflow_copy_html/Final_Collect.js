@@ -10,7 +10,7 @@
  *  - decide final _all_ok ONLY when all enabled channels succeeded
  *  - build one aggregated update_error log per post
  *  - output ONE item per post_id with fields for Google Sheets update:
- *      - update_last_run_at_utc / update_last_run_at / update_last_run_key / update_plan_run_at (ONLY if _all_ok)
+ *      - update_last_run_at_utc / update_last_run_at / update_last_run_key / update_plan_run_at (ALWAYS, even if _all_ok=false)
  *      - update_error (always)
  */
 
@@ -184,6 +184,11 @@ function lastLine(s) {
   return lines.length ? lines[lines.length - 1] : '';
 }
 
+function ensureNowIso(v) {
+  const s = safeStr(v).trim();
+  return s ? s : new Date().toISOString();
+}
+
 const out = [];
 
 for (const agg of byPost.values()) {
@@ -215,6 +220,14 @@ for (const agg of byPost.values()) {
     newError = `[INFO] ${safeStr(agg.now_utc || new Date().toISOString())} no logs from collectors`;
   }
 
+  // IMPORTANT CHANGE:
+  // We always write last_run_* and plan_run_at, even if allOk=false.
+  // This prevents repeated retries every 5 minutes for the same runKey.
+  const finalNowUtc = ensureNowIso(agg.now_utc);
+  const finalNowLocal = pickFirstNonEmpty(agg.now_local, agg._now, null); // keep whatever local string collectors provided
+  const finalRunKey = pickFirstNonEmpty(agg.last_run_key, null);
+  const finalPlanRunAt = pickFirstNonEmpty(agg.plan_run_at, null);
+
   out.push({
     json: {
       post_id: agg.post_id,
@@ -244,11 +257,11 @@ for (const agg of byPost.values()) {
       _max_sent_fail: agg.max_fail_count,
       _max_sent_total: agg.max_total,
 
-      // Sheets update fields (write only on final success)
-      update_last_run_at_utc: allOk ? (agg.now_utc ?? null) : null,
-      update_last_run_at: allOk ? (agg.now_local ?? null) : null,
-      update_last_run_key: allOk ? (agg.last_run_key ?? null) : null,
-      update_plan_run_at: allOk ? (agg.plan_run_at ?? null) : null,
+      // Sheets update fields (ALWAYS write, even on error)
+      update_last_run_at_utc: finalNowUtc,
+      update_last_run_at: finalNowLocal ?? null,
+      update_last_run_key: finalRunKey ?? null,
+      update_plan_run_at: finalPlanRunAt ?? null,
 
       update_error: newError,
     },

@@ -10,12 +10,41 @@
 const rows = $input.all().map(x => x.json ?? {});
 
 // --- helpers ---
+function cleanLine(s) {
+  return String(s ?? '').replace(/[\uFEFF\u200B\u200C\u200D\u2060\u00AD]/g, '').trim();
+}
+
+function stripGoodMorningNavigationMax(text) {
+  // Убираем ТОЛЬКО конечную строку "!!Навигация" (с возможными пробелами)
+  // и не трогаем текст, если "!!Навигация" где-то внутри.
+  let t = String(text ?? '').replace(/\r\n/g, '\n');
+  t = t.replace(/\n\s*!!Навигация\s*$/u, '');
+  return t.trim();
+}
+
+function ensureGoodMorningOrderButton(orderLinks) {
+  // Возвращаем новый массив order_links, где есть кнопка "ЗАКАЗАТЬ В КООПТОРГЕ" -> https://koptorg.ru
+  const base = Array.isArray(orderLinks) ? orderLinks : [];
+  const btnText = 'ЗАКАЗАТЬ В КООПТОРГЕ';
+  const btnUrl = 'https://koptorg.ru';
+
+  const exists = base.some(b => {
+    const t = cleanLine(b?.text);
+    const u = cleanLine(b?.url);
+    return t.toLowerCase() === btnText.toLowerCase() && u === btnUrl;
+  });
+
+  if (exists) return base;
+
+  return [...base, { text: btnText, url: btnUrl }];
+}
+
 function normButtons(orderLinks) {
   const arr = Array.isArray(orderLinks) ? orderLinks : [];
   const clean = arr
     .map(b => ({
-      text: (b?.text ?? '').toString().trim(),
-      url: (b?.url ?? '').toString().trim(),
+      text: cleanLine(b?.text),
+      url: cleanLine(b?.url),
     }))
     .filter(b => b.text && b.url && /^https?:\/\//i.test(b.url));
 
@@ -64,9 +93,15 @@ for (const [k, items] of groups.entries()) {
     continue;
   }
 
-  const text = (first.max?.text ?? first.text ?? '').toString();
+  // --- TEXT (MAX) ---
+  let text = (first.max?.text ?? first.text ?? '').toString();
 
-  // медиа-вложения (только там где есть token+mediaType)
+  // FIX #1: убрать "!!Навигация" ТОЛЬКО для GOODMORNING в ветке MAX
+  if (first._goodmorning === true) {
+    text = stripGoodMorningNavigationMax(text);
+  }
+
+  // --- media attachments (tokenized) ---
   const mediaAttachments = items
     .filter(x => x.token && x.mediaType)
     .map(x => ({
@@ -74,8 +109,14 @@ for (const [k, items] of groups.entries()) {
       payload: { token: x.token }
     }));
 
-  // кнопки из order_links
-  const keyboardAttachment = normButtons(first.order_links);
+  // --- buttons / inline keyboard ---
+  // FIX #2: для GOODMORNING добавляем кнопку "ЗАКАЗАТЬ В КООПТОРГЕ" -> https://koptorg.ru
+  const effectiveOrderLinks =
+    (first._goodmorning === true)
+      ? ensureGoodMorningOrderButton(first.order_links)
+      : first.order_links;
+
+  const keyboardAttachment = normButtons(effectiveOrderLinks);
 
   const attachments = [...mediaAttachments];
   if (keyboardAttachment) attachments.push(keyboardAttachment);
@@ -91,6 +132,9 @@ for (const [k, items] of groups.entries()) {
       format: "markdown",
       notify: true,
       attachments,
+
+      // (опционально, но полезно для дебага) — что реально пошло в кнопки
+      // _max_effective_order_links: effectiveOrderLinks,
     }
   });
 }
